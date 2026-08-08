@@ -40,45 +40,49 @@ renovation is on hold until October.
 
 <img src="screenshots/07-conversation.png" width="320" alt="conversation">
 
+### conversationHistory
+
+<img src="screenshots/08-conversationHistory.png" width="320" alt="conversationHistory">
+
 ### memoryHome
 
-<img src="screenshots/08-memoryHome.png" width="320" alt="memoryHome">
+<img src="screenshots/09-memoryHome.png" width="320" alt="memoryHome">
 
 ### aboutYou
 
-<img src="screenshots/09-aboutYou.png" width="320" alt="aboutYou">
+<img src="screenshots/10-aboutYou.png" width="320" alt="aboutYou">
 
 ### people
 
-<img src="screenshots/10-people.png" width="320" alt="people">
+<img src="screenshots/11-people.png" width="320" alt="people">
 
 ### personDetail
 
-<img src="screenshots/11-personDetail.png" width="320" alt="personDetail">
+<img src="screenshots/12-personDetail.png" width="320" alt="personDetail">
 
 ### facts
 
-<img src="screenshots/12-facts.png" width="320" alt="facts">
+<img src="screenshots/13-facts.png" width="320" alt="facts">
 
 ### settings
 
-<img src="screenshots/13-settings.png" width="320" alt="settings">
+<img src="screenshots/14-settings.png" width="320" alt="settings">
 
 ### personalitySettings
 
-<img src="screenshots/14-personalitySettings.png" width="320" alt="personalitySettings">
+<img src="screenshots/15-personalitySettings.png" width="320" alt="personalitySettings">
 
 ### aiModel
 
-<img src="screenshots/15-aiModel.png" width="320" alt="aiModel">
+<img src="screenshots/16-aiModel.png" width="320" alt="aiModel">
 
 ### privacy
 
-<img src="screenshots/16-privacy.png" width="320" alt="privacy">
+<img src="screenshots/17-privacy.png" width="320" alt="privacy">
 
 ### activity
 
-<img src="screenshots/17-activity.png" width="320" alt="activity">
+<img src="screenshots/18-activity.png" width="320" alt="activity">
 
 ## Dark
 
