@@ -80,12 +80,25 @@ grep -E "(error: |✘|failed after|Testing failed)" "$FULL_LOG" \
     | sort -u \
     > "$REPORT"
 
-PASSED=$(grep -cE "✔|passed after" "$FULL_LOG" 2>/dev/null)
-PASSED=${PASSED:-0}
+# Swift Testing prints its own authoritative total — "Test run with N tests passed after ..." — so parse
+# that line instead of counting ticks.
+#
+# The previous version counted lines matching `✔`, which also matches one line per *suite* plus the run
+# summary. That inflates the figure and, worse, makes it drift for reasons unrelated to the tests: the
+# same unchanged suite reported 210 one run and 241 another. Both numbers were quoted as a test count in
+# the README before the discrepancy was noticed. A number nobody can reproduce is worse than no number.
+TEST_COUNT=$(grep -oE "Test run with [0-9]+ test" "$FULL_LOG" | tail -1 | grep -oE "[0-9]+")
+SUITE_COUNT=$(grep -cE "✔ Suite " "$FULL_LOG")
 
 echo
 if [ "$STATUS" -eq 0 ]; then
-    echo "==> TESTS PASSED  ($PASSED test(s) recorded)"
+    if [ -n "${TEST_COUNT:-}" ]; then
+        echo "==> TESTS PASSED  ($TEST_COUNT tests in ${SUITE_COUNT:-0} suites)"
+    else
+        # Reaching here means xcodebuild succeeded but the summary line was not found — report that
+        # honestly rather than printing a zero that looks like a real count.
+        echo "==> TESTS PASSED  (count unavailable — no Swift Testing summary line in $FULL_LOG)"
+    fi
     echo
     echo "That is the whole Phase 1 and Phase 2 acceptance bar. Tell Claude and it will start Phase 3."
 else

@@ -12,7 +12,9 @@ remembers what matters to you, speaks in a voice you choose, and can actually do
 > conversation: input goes to Apple's on-device model through the orchestrator, the answer persists, and
 > the transcript renders from the store.
 >
-> Verified on Xcode 26.6 / Swift 6.3.3: **0 errors, 0 warnings, 210 tests passing across 26 suites.**
+> Verified on Xcode 26.6 / Swift 6.3.3: **0 errors, 0 warnings, whole suite passing.** The exact test
+> count is whatever the newest CI run prints — earlier versions of this file quoted a number produced by
+> a bad counter in `test.sh`, so it is no longer restated here where it can go stale.
 > See [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md) for the verification record — including which of the
 > predicted compile risks turned out to be real — and for what is deliberately deferred.
 >
