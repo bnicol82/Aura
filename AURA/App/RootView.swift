@@ -7,6 +7,19 @@ struct RootView: View {
 
     var body: some View {
         Group {
+            #if DEBUG
+            // Screenshot mode short-circuits everything: its own seeded environment, one screen, no
+            // onboarding. The whole branch compiles out of a release build.
+            if let screen = ScreenshotMode.requestedScreen {
+                ScreenshotHostView(screen: screen)
+            } else if !environment.isLoaded {
+                LaunchPlaceholderView()
+            } else if !environment.hasCompletedOnboarding {
+                OnboardingFlowView()
+            } else {
+                MainTabView()
+            }
+            #else
             if !environment.isLoaded {
                 LaunchPlaceholderView()
             } else if !environment.hasCompletedOnboarding {
@@ -14,8 +27,12 @@ struct RootView: View {
             } else {
                 MainTabView()
             }
+            #endif
         }
         .task {
+            #if DEBUG
+            guard !ScreenshotMode.isActive else { return }
+            #endif
             guard !environment.isLoaded else { return }
             await environment.load()
         }

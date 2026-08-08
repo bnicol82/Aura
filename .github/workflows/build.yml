@@ -22,6 +22,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Needed only by the screenshot commit step.
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build and test (iOS Simulator)
@@ -155,6 +159,51 @@ jobs:
               head -60 build/test-results.txt 2>/dev/null || true
               echo '```'
             fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture screenshots
+        id: screenshots
+        # Only worth doing when the app actually built. Non-fatal: a missing screenshot is a
+        # documentation gap, not a broken build, and it must not turn a green run red.
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: ./Scripts/screenshots.sh
+
+      - name: Commit screenshots
+        # Pushed back to the branch so they are viewable on github.com from a phone, which is the whole
+        # point — the person reviewing this has no Mac and cannot run the app.
+        #
+        # The commit message carries GitHub's skip-CI marker, which is what stops this push from
+        # triggering another run and looping forever.
+        #
+        # WARNING for anyone writing commit messages by hand: GitHub scans the whole message, body
+        # included, for that marker. Mentioning it in prose — even inside backticks, even while
+        # explaining this very mechanism — silently skips your run. That has already happened once here.
+        # Say "the skip-CI marker", never the literal token.
+        #
+        # Non-fatal on purpose: if a concurrent push makes this a non-fast-forward, the next run
+        # regenerates the images anyway.
+        if: steps.screenshots.outcome == 'success' && github.event_name == 'push'
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots docs/SCREENSHOTS.md
+
+          if git diff --cached --quiet; then
+            echo "Screens are unchanged since the last run — nothing to commit."
+            exit 0
+          fi
+
+          COUNT=$(git diff --cached --name-only | grep -c "docs/screenshots/" || true)
+          git commit -m "Update screenshots from CI (${COUNT:-0} changed) [skip ci]"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+          {
+            echo "## Screens"
+            echo
+            echo "${COUNT:-0} image(s) updated — [browse them](../blob/${GITHUB_REF_NAME}/docs/SCREENSHOTS.md)."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload logs

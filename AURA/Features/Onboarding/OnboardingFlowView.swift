@@ -16,6 +16,12 @@ import SwiftUI
 struct OnboardingFlowView: View {
     @Environment(AppEnvironment.self) private var environment
 
+    #if DEBUG
+    /// Screenshot mode opens the flow at a specific step. Debug-only: a release build has no way to
+    /// enter onboarding partway through.
+    var initialStep: Step?
+    #endif
+
     @State private var step: Step = .welcome
     @State private var assistantName = AuraDefaults.assistantName
     @State private var userName = ""
@@ -59,6 +65,11 @@ struct OnboardingFlowView: View {
             }
             .background(Color(.systemBackground))
             .animation(.easeInOut(duration: 0.25), value: step)
+            #if DEBUG
+            .task {
+                if let initialStep { step = initialStep }
+            }
+            #endif
         }
     }
 
