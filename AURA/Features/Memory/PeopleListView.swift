@@ -252,14 +252,28 @@ struct PersonDetailView: View {
         notes = person.notes ?? ""
     }
 
+    /// Builds the mutation, then applies it.
+    ///
+    /// `configure` runs *before* the `Task` rather than inside it. A non-escaping closure parameter
+    /// cannot be captured by an escaping closure, and marking it `@escaping` would be the worse fix:
+    /// building the value first means only a `Sendable` `PersonProfileMutation` crosses into the task,
+    /// rather than a closure that could touch view state from another context.
     private func commit(_ configure: (inout PersonProfileMutation) -> Void) {
-        Task { await commitAsync(configure) }
+        var mutation = PersonProfileMutation()
+        configure(&mutation)
+        guard !mutation.isEmpty else { return }
+        Task { await apply(mutation) }
     }
 
+    /// The same thing for callers that are already in an async context, such as `StringListSection`.
     private func commitAsync(_ configure: (inout PersonProfileMutation) -> Void) async {
         var mutation = PersonProfileMutation()
         configure(&mutation)
         guard !mutation.isEmpty else { return }
+        await apply(mutation)
+    }
+
+    private func apply(_ mutation: PersonProfileMutation) async {
         do {
             person = try await environment.userProfileStore.updatePerson(id: personID, with: mutation)
             await environment.refreshUserProfile()
