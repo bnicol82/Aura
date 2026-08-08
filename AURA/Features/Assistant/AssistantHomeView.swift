@@ -21,10 +21,7 @@ struct AssistantHomeView: View {
                     orb
                     prompt
                     quickActions
-                    PendingFeatureNotice(
-                        stage: FeatureFlags.textConversation,
-                        symbolName: "bubble.left.and.text.bubble.right"
-                    )
+                    modelAvailabilityNotice
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
@@ -110,6 +107,29 @@ struct AssistantHomeView: View {
                 symbolName: "sun.horizon",
                 stage: FeatureFlags.systemIntegrations
             ) {}
+        }
+    }
+
+    /// Shown only when the active model cannot currently answer — an ineligible device, Apple
+    /// Intelligence switched off, assets still downloading. Says what is wrong and what would fix it,
+    /// rather than letting the user discover it by sending a message that fails (§68, §69).
+    @ViewBuilder
+    private var modelAvailabilityNotice: some View {
+        if let state = environment.activeProviderState, !state.availability.isAvailable {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(state.availability.userFacingDescription, systemImage: "exclamationmark.circle")
+                    .font(.footnote)
+                if let recovery = state.availability.userFacingRecovery {
+                    Text(recovery)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityElement(children: .combine)
         }
     }
 

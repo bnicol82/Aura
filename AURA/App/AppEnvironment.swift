@@ -23,11 +23,23 @@ final class AppEnvironment {
 
     let assistantProfileStore: AssistantProfileStore
     let userProfileStore: UserProfileStore
+    let conversationStore: SwiftDataConversationStore
 
     // MARK: Stateless engines
 
     let personalityEngine = PersonalityEngine()
     let sensitivityClassifier = SensitivityClassifier()
+
+    // MARK: Intelligence
+
+    let networkMonitor: any NetworkStatusProviding
+    let personalizationEngine: any PersonalizationEngineProtocol
+    let modelRouter: any ModelRouting
+    let orchestrator: any AssistantOrchestrating
+
+    /// The live conversation, held here rather than in a view's `@State` so an in-flight turn survives
+    /// the user switching tabs mid-answer.
+    let conversation: ConversationController
 
     // MARK: Services
 
@@ -61,18 +73,61 @@ final class AppEnvironment {
     private let defaults: UserDefaults
     private static let onboardingCompletedKey = "aura.onboarding.completed"
 
+    /// - Parameters:
+    ///   - languageModelProviders: preference order, on-device first. Defaults to Apple's on-device
+    ///     model alone; cloud providers are added in V2, and only when the user configures one.
+    ///   - networkMonitor: injectable so previews and tests need no radio.
     init(
         persistence: PersistenceController,
         startupError: AuraError? = nil,
         credentialStore: (any SecureCredentialStoring)? = nil,
         permissionManager: (any PermissionManaging)? = nil,
         toolRegistry: ToolRegistry = ToolRegistry(),
+        languageModelProviders: [any LanguageModelProvider]? = nil,
+        networkMonitor: (any NetworkStatusProviding)? = nil,
         defaults: UserDefaults = .standard
     ) {
         self.persistence = persistence
         self.startupError = startupError
-        self.assistantProfileStore = AssistantProfileStore(modelContainer: persistence.container)
-        self.userProfileStore = UserProfileStore(modelContainer: persistence.container)
+
+        let assistantProfileStore = AssistantProfileStore(modelContainer: persistence.container)
+        let userProfileStore = UserProfileStore(modelContainer: persistence.container)
+        let conversationStore = SwiftDataConversationStore(modelContainer: persistence.container)
+        self.assistantProfileStore = assistantProfileStore
+        self.userProfileStore = userProfileStore
+        self.conversationStore = conversationStore
+
+        let monitor = networkMonitor ?? NetworkMonitor()
+        self.networkMonitor = monitor
+
+        let personalizationEngine = DefaultPersonalizationEngine(
+            assistantProfileStore: assistantProfileStore,
+            userProfileStore: userProfileStore,
+            // Phase 7 injects the retrieval engine here. Until then profile keyword search carries it.
+            memoryRetrieval: nil
+        )
+        self.personalizationEngine = personalizationEngine
+
+        let router = DefaultModelRouter(
+            providers: languageModelProviders ?? [AppleFoundationModelProvider()],
+            networkMonitor: monitor
+        )
+        self.modelRouter = router
+
+        let orchestrator = AssistantOrchestrator(
+            conversationStore: conversationStore,
+            personalizationEngine: personalizationEngine,
+            router: router,
+            assistantProfileStore: assistantProfileStore,
+            networkMonitor: monitor
+        )
+        self.orchestrator = orchestrator
+
+        self.conversation = ConversationController(
+            orchestrator: orchestrator,
+            conversationStore: conversationStore
+        )
+
         self.credentialStore = credentialStore ?? KeychainCredentialStore()
         self.permissionManager = permissionManager ?? StubPermissionManager()
         self.toolRegistry = toolRegistry
@@ -82,11 +137,26 @@ final class AppEnvironment {
 
     // MARK: - Loading
 
-    /// Loads the profiles. Called once when the root view appears.
+    /// Loads the profiles and provider availability. Called once when the root view appears.
     func load() async {
         await refreshAssistantProfile()
         await refreshUserProfile()
         isLoaded = true
+        // Availability is a separate, slower question than "what is my assistant called", so it is not
+        // allowed to hold up first paint.
+        await refreshProviderStates()
+    }
+
+    /// Live model availability, for Settings and the privacy dashboard (§7, §49).
+    private(set) var providerStates: [ProviderState] = []
+
+    func refreshProviderStates() async {
+        providerStates = await modelRouter.providerStates()
+    }
+
+    /// The provider that would answer a plain conversational turn right now.
+    var activeProviderState: ProviderState? {
+        providerStates.first(where: \.isActiveDefault)
     }
 
     func refreshAssistantProfile() async {
@@ -185,7 +255,16 @@ extension AppEnvironment {
             let environment = AppEnvironment(
                 persistence: controller,
                 credentialStore: InMemoryCredentialStore(),
-                permissionManager: StubPermissionManager.allowingEverything()
+                permissionManager: StubPermissionManager.allowingEverything(),
+                // A mock provider rather than the real one: previews must render identically whether or
+                // not the host has Apple Intelligence enabled.
+                languageModelProviders: [
+                    MockLanguageModelProvider(
+                        displayName: "Preview Model",
+                        behavior: .respond("You've got three things today — dentist at 2, and the tuition payment is due Friday.")
+                    )
+                ],
+                networkMonitor: StubNetworkMonitor.online
             )
             environment.assistantProfile = AssistantProfileSnapshot(
                 assistantName: assistantName,

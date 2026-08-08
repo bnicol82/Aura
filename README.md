@@ -6,10 +6,12 @@ AURA is a native SwiftUI application built around six pillars: **Intelligence, P
 Memory, Action, Privacy, Continuity**. It is not a chat client — it is a personal AI layer that
 remembers what matters to you, speaks in a voice you choose, and can actually do things.
 
-> **Status: Phase 1 (Foundation) complete.** See [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md) for what
-> works today, what is deliberately stubbed, and what comes next. Nothing in this repository has
-> been compiled yet — it was authored in a Linux container with no Swift toolchain. Treat the first
-> `⌘B` in Xcode as part of Phase 1 acceptance.
+> **Status: Phase 2 (Basic Intelligence) complete.** AURA holds a real typed conversation: input goes
+> to Apple's on-device model through the orchestrator, the answer persists, and the transcript renders
+> from the store. See [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md) for what works today, what is
+> deliberately deferred, and what comes next. Nothing in this repository has been compiled yet — it was
+> authored in a Linux container with no Swift toolchain. Treat the first `⌘B` in Xcode as part of
+> acceptance, and see the build log's ranked compile risks if it fails.
 
 ## Requirements
 
@@ -79,6 +81,20 @@ AURA/
 AURATests/          Swift Testing suites
 docs/               architecture and per-stage build log
 ```
+
+## What works today
+
+| | |
+|---|---|
+| Onboarding, assistant naming, personality | Phase 1 |
+| "What AURA Knows About You" — editable profile, people, categorised facts | Phase 1 |
+| Typed conversation against Apple's on-device model | Phase 2 |
+| Model routing across all three AI modes, with on-device pinning for extraction | Phase 2 |
+| Persisted conversations, multi-turn history, archive search | Phase 2 |
+| Selective context assembly — only what a request needs reaches the model | Phase 2 |
+
+Voice, automatic memory, tools, iCloud sync and App Intents are declared pending in
+`FeatureFlags` and the UI says so rather than failing quietly.
 
 ## Privacy posture
 

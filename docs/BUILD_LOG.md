@@ -5,6 +5,153 @@ limitations, compile risks, next step.
 
 ---
 
+## Phase 2 — Basic Intelligence
+
+**Status: complete, not yet compiled.**
+
+AURA holds a real conversation as of this stage. Typed input goes to Apple's on-device model through the
+orchestrator, the answer is persisted, and the transcript renders from the store.
+
+### Files created (7)
+
+`Core/AI/Providers/AppleFoundationModelProvider.swift` ·
+`Core/AI/Routing/DefaultModelRouter.swift` ·
+`Core/AI/Orchestration/AssistantOrchestrator.swift` ·
+`Core/Conversation/SwiftDataConversationStore.swift` ·
+`Core/Personalization/DefaultPersonalizationEngine.swift` ·
+`Core/Support/NetworkMonitor.swift` ·
+`Features/Assistant/ConversationController.swift`
+
+**Tests (4)** — `ModelRouterTests.swift` · `AssistantOrchestratorTests.swift` ·
+`ConversationStoreTests.swift` · `AppleProviderTests.swift`
+
+### Files modified (8)
+
+`App/AppEnvironment.swift` — wires the intelligence layer and exposes live provider states ·
+`Core/Support/FeatureStage.swift` — `textConversation` and `conversationHistory` flipped to `.live` ·
+`Features/Assistant/ConversationView.swift` — working composer, store-backed transcript ·
+`Features/Assistant/AssistantHomeView.swift` — model-availability notice replaces the pending note ·
+`Features/Settings/AIModelSettingsView.swift` — real provider rows ·
+`Features/Settings/PrivacyDashboardView.swift` — on-device status from a live check, not a build flag ·
+`Features/Onboarding/OnboardingSteps.swift` — final screen no longer disclaims typing ·
+`Features/Shared/PendingFeatureNotice.swift` — preview points at a still-pending stage
+
+### Features now working
+
+- **Typed conversation.** Send a message, get an answer from `SystemLanguageModel`, see it persist.
+- **Multi-turn continuity.** History is rendered into each prompt, bounded by
+  `AuraDefaults.workingMemoryTurnLimit`, and a conversation resumes for six hours before a new one starts.
+- **Model routing.** All three AI modes, on-device preference, cloud fallback with the reason attached,
+  and escalation after a context-window overflow.
+- **On-device pinning.** Extraction and classification cannot leave the device, including in
+  cloud-enhanced mode. Enforced in `DefaultModelRouter` and asserted across every mode.
+- **Selective context.** A question about Blake retrieves Blake and not Jennifer, using
+  `UserProfileStore`'s keyword search — real selectivity from the first conversation, not deferred to
+  Phase 7.
+- **Sensitivity in the loop.** Topic classification runs per turn and reaches the model's instructions.
+- **Honest failures.** Every failure writes a flagged message; `workingMemory` excludes them so the model
+  never treats an error as its own prior answer. A user-cancelled turn writes nothing at all.
+- **Availability UX.** The home screen warns when the active model cannot answer, with the recovery step,
+  instead of letting the user discover it by sending a message that fails.
+
+### Two API findings that changed the design
+
+Checked against Apple's live documentation, and both are the kind of thing that would have compiled
+wrong or shipped wrong:
+
+1. **`LanguageModelSession.Usage` is iOS 27 only** — the `Usage` type is beta-only, so `Response.usage`
+   is unavailable on iOS 26. The Apple provider reports `nil` usage rather than guessing. No real loss:
+   §67's cost controls exist for metered cloud providers, and on-device inference is free.
+2. **`Prompt.init` and `Instructions.init` take result builders, not strings** —
+   `init(@PromptBuilder _ content: () throws -> Prompt)`. `Prompt("text")` would not compile;
+   `Prompt { text }` does, because `String` reaches `PromptRepresentable` through `Generable`.
+
+Also confirmed: `GenerationOptions(samplingMode:temperature:maximumResponseTokens:)` is back-deployed to
+iOS 26 while the `toolCallingMode:` variant is iOS 27 and has no default for that label — so there is no
+overload ambiguity on either SDK.
+
+### Tests added
+
+| Suite | Covers |
+|---|---|
+| `ModelRouterTests` | On-device pinning across every AI mode, fail-closed for pinned purposes, all three modes, offline behaviour, context-overflow escalation, preference order, the three "nothing usable" error paths, transient-reason preference, provider states, availability caching and invalidation |
+| `AssistantOrchestratorTests` | A full turn end to end against real stores; conversation creation and titling; multi-turn history reaching the provider; input normalisation; empty-input refusal; identity and honesty rules in instructions; the explicit no-context statement; **context selectivity** (Blake without Jennifer); fact filtering; memory-off suppression; standing instructions; sensitivity; model failure, unavailability and empty-response handling; failures excluded from replayed history; event ordering; context item counts; silent cancellation; the working-memory bound; message assembly |
+| `ConversationStoreTests` | Create/read/rename/pin/summarise/archive/delete, title derivation and preservation, resume window, per-conversation sequence numbers with colliding timestamps, supplied ids, in-place updates, working-memory window excluding failures, candidate status, archive search and excerpting |
+| `AppleProviderTests` | Availability mapping and transience, prompt rendering for single turns / history / tool results / empty requests, instructions never leaking into the prompt, option mapping, error fallback |
+
+`AssistantOrchestratorTests` is the important one: it exercises the real conversation store, the real
+personalization engine and the real router, with only the model doubled.
+
+### Known limitations
+
+| Not working | Lands in |
+|---|---|
+| Token-by-token streaming. The provider answers in one piece and inherits the protocol's default `stream`. | Phase 3 |
+| Session reuse and `prewarm()`. A fresh session per request costs prompt re-processing. | Phase 3 |
+| Voice input and spoken replies | Phase 5 |
+| History browsing and archive-search UI. The store and search are done; nothing surfaces them. | Phase 6 |
+| Memory extraction, retrieval ranking, forget commands | Phase 7 |
+| iCloud sync | Phase 9 |
+| Tools, Activity rows | Phase 10 |
+| App Intents, Siri, Shortcuts, Action Button | Phase 11 |
+| Calendar, Reminders, Weather, Contacts, Location | Phase 12 |
+
+Two deliberate deferrals worth naming:
+
+- **Streaming was not guessed at.** `ResponseStream`'s element shape changed between the iOS 26.0 release
+  and the current documentation generation — the docs now show a `Snapshot` with `.content`, where the
+  original release yielded `Content.PartiallyGenerated` directly. Writing either one blind gives a 50%
+  chance of a compile error and no way to tell which from here. §74 puts streaming in Phase 3 anyway, so
+  it waits for a real SDK. `ConversationController` already handles `.textDelta`, so Phase 3 is a provider
+  change only.
+- **`Transcript`-based history was not guessed at either.** `Transcript.Prompt` and `Transcript.Response`
+  would be the correct way to give the session real multi-turn structure, but `Transcript.Response`
+  requires an `assetIDs` argument whose construction is not documented publicly. Rendering history into
+  the prompt uses only verified API and is consistent with the store.
+
+### Compile risks
+
+New in this phase, most likely first:
+
+1. **`Prompt { promptText }` / `Instructions { instructions }`.** String-in-builder relies on
+   `String: Generable → ConvertibleToGeneratedContent → PromptRepresentable`. Documented transitively
+   rather than as a direct conformance. If it fails, the fix is one line per site.
+2. **`response.content` on `Response<String>`.** Verified as `let content: Content`, so `String` here.
+3. **`nonisolated func stream` on the orchestrator.** Needed because the protocol requirement is
+   synchronous. If strict concurrency objects to the `@Sendable` emit closure, the alternative is making
+   the protocol requirement `async`.
+4. **`@Query` built in `TranscriptView.init` with a captured `conversationID`.** The documented way to
+   scope a query to a runtime value, but `$0.conversation?.id == conversationID` traverses an optional
+   to-one relationship inside `#Predicate`. If that is rejected, the fallback is a stored
+   `conversationID` column on `Message` alongside the relationship.
+5. **`SwiftDataConversationStore` conforming to a 20-member protocol via `@ModelActor`.** Same
+   consideration as the Phase 1 stores.
+6. **`GenerationError` deprecation warnings** under an iOS 27 SDK, as flagged in Phase 1. Warnings only.
+
+### Remaining issues
+
+- Still not compiled. Every behavioural claim rests on tests that have not run.
+- `AppEnvironment` constructs a real `NetworkMonitor` in its initialiser, which starts an `NWPathMonitor`
+  at launch. Cheap, but it is a side effect in a container's `init`; if it proves awkward it should move
+  behind a `start()` call from `load()`.
+- No conversation list UI yet, so `recentConversations` and `searchMessages` are exercised only by tests.
+- `ConversationController.streamingText` is written but nothing produces deltas until Phase 3.
+
+### Next implementation step
+
+**Phase 3 — Orchestration polish, on a machine with Xcode.**
+
+1. Build. Fix what the compiler finds, starting with the risks above.
+2. Verify `ResponseStream`'s element type against the SDK, then implement real streaming in
+   `AppleFoundationModelProvider.stream`. The consumer side is already written.
+3. Verify `Transcript.Prompt` / `Transcript.Response` initialisers; if they are workable, move history
+   into the session transcript and add `prewarm()`.
+4. Add a rolling conversation summary so threads longer than the working-memory window stay coherent.
+5. Split `PersonalizationContext` into stable instructions and per-turn context, so a reused session can
+   keep its cache warm across turns.
+
+---
+
 ## Phase 1 — Foundation
 
 **Status: complete, not yet compiled.**

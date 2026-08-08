@@ -24,6 +24,7 @@ struct PrivacyDashboardView: View {
         .navigationTitle("Privacy")
         .task {
             permissionStatuses = await environment.permissionManager.allStatuses()
+            await environment.refreshProviderStates()
         }
         .confirmationDialog(
             "Delete everything?",
@@ -44,9 +45,12 @@ struct PrivacyDashboardView: View {
         Section {
             PrivacyStatusRow(
                 title: "On-device AI",
-                value: FeatureFlags.textConversation.isLive ? "Active" : "Not connected yet",
+                value: onDeviceStatusText,
                 symbolName: "iphone",
-                tone: FeatureFlags.textConversation.isLive ? .good : .neutral
+                tone: onDeviceIsAvailable ? .good : .neutral,
+                detail: environment.providerStates
+                    .first(where: { $0.isOnDevice && !$0.availability.isAvailable })?
+                    .availability.userFacingRecovery
             )
             PrivacyStatusRow(
                 title: "Cloud AI",
@@ -148,6 +152,18 @@ struct PrivacyDashboardView: View {
                 Text(note)
             }
         }
+    }
+
+    /// Whether an on-device model can actually answer right now — a live check, not a build flag.
+    private var onDeviceIsAvailable: Bool {
+        environment.providerStates.contains { $0.isOnDevice && $0.availability.isAvailable }
+    }
+
+    private var onDeviceStatusText: String {
+        guard let state = environment.providerStates.first(where: \.isOnDevice) else {
+            return "Checking…"
+        }
+        return state.availability.isAvailable ? "Active" : state.availability.statusLabel
     }
 
     private var cloudStatusText: String {

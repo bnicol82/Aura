@@ -9,8 +9,6 @@ import SwiftUI
 struct AIModelSettingsView: View {
     @Environment(AppEnvironment.self) private var environment
 
-    /// Populated by `ModelRouting.providerStates()` from Phase 2.
-    @State private var providerStates: [ProviderState] = []
 
     var body: some View {
         Form {
@@ -48,11 +46,16 @@ struct AIModelSettingsView: View {
             }
 
             Section {
-                if providerStates.isEmpty {
-                    PendingFeatureNotice(stage: FeatureFlags.textConversation, symbolName: "cpu")
-                        .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                if environment.providerStates.isEmpty {
+                    // Only before the first availability check completes; it is not a stub state.
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.mini)
+                        Text("Checking what's available…")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 } else {
-                    ForEach(providerStates) { state in
+                    ForEach(environment.providerStates) { state in
                         ProviderStatusRow(state: state)
                     }
                 }
@@ -73,6 +76,11 @@ struct AIModelSettingsView: View {
             }
         }
         .navigationTitle("AI Model")
+        .task {
+            // Availability changes outside the app — Apple Intelligence gets switched on, assets finish
+            // downloading — so this screen always asks fresh rather than trusting the launch-time read.
+            await environment.refreshProviderStates()
+        }
     }
 
     private func symbolName(for mode: AIMode) -> String {

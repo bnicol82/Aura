@@ -465,18 +465,18 @@ struct OnboardingReadyStep: View {
                 Text("I'm \(assistantName).")
                     .font(.largeTitle.weight(.bold))
                     .multilineTextAlignment(.center)
-                Text("Tell me about yourself whenever you like — or just ask me something.")
+                Text("Ask me something, or tell me about yourself whenever you like.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            // Setup must not oversell what is finished. This is the honest version of
-            // "press the microphone and start talking" while the model layer is still being built.
+            // Typing works as of Phase 2. Talking does not, and setup says so rather than implying the
+            // microphone is live (§75).
             PendingFeatureNotice(
-                stage: FeatureFlags.textConversation,
-                symbolName: "hammer.fill"
+                stage: FeatureFlags.voiceInput,
+                symbolName: "mic.slash"
             )
         }
         .frame(maxWidth: .infinity)

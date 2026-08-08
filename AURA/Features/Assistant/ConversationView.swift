@@ -3,22 +3,13 @@ import SwiftUI
 
 /// The conversation screen (§43).
 ///
-/// The transcript, composer, tool-activity rows and provenance indicators are all real and read from
-/// the store. What is not connected in Phase 1 is the thing behind the send button: there is no
-/// model, no orchestrator, no reply. Rather than fake one, the composer is disabled and says so.
-///
-/// The alternative — accepting the message and showing a canned answer — would be exactly the
-/// dishonesty §78 exists to prevent.
+/// The transcript renders from SwiftData, not from view state. The orchestrator writes a turn, `@Query`
+/// notices, and the screen updates — which means the transcript is always exactly what was persisted.
+/// There is no second copy of the conversation in the UI that could drift from the store.
 @MainActor
 struct ConversationView: View {
     @Environment(AppEnvironment.self) private var environment
 
-    /// Messages come straight from SwiftData. Once the orchestrator writes turns, this screen shows
-    /// them with no further work.
-    @Query(sort: \Message.createdAt, order: .forward)
-    private var messages: [Message]
-
-    @State private var draft = ""
     @FocusState private var isComposerFocused: Bool
 
     var body: some View {
@@ -30,48 +21,53 @@ struct ConversationView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle(environment.assistantName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    controller.startNewConversation()
+                } label: {
+                    Label("New conversation", systemImage: "plus.message")
+                }
+                .disabled(controller.isBusy || controller.conversationID == nil)
+            }
+        }
+        .task { await controller.prepare() }
+        .errorAlert(title: "That didn't work", message: Binding(
+            get: { controller.errorMessage },
+            set: { controller.errorMessage = $0 }
+        ))
     }
+
+    private var controller: ConversationController { environment.conversation }
 
     // MARK: - Transcript
 
+    @ViewBuilder
     private var transcript: some View {
-        ScrollViewReader { proxy in
+        if let conversationID = controller.conversationID {
+            TranscriptView(
+                conversationID: conversationID,
+                assistantName: environment.assistantName,
+                streamingText: controller.streamingText
+            )
+        } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    if messages.isEmpty {
-                        emptyState
-                            .padding(.top, 60)
-                    } else {
-                        ForEach(messages) { message in
-                            MessageRow(message: message.snapshot, assistantName: environment.assistantName)
-                                .id(message.id)
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .onChange(of: messages.count) { _, _ in
-                guard let last = messages.last else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(last.id, anchor: .bottom)
-                }
+                emptyState.padding(.top, 60)
             }
         }
     }
 
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 34))
-                .foregroundStyle(.tertiary)
-            Text("Nothing here yet.")
+            AssistantOrbView(state: controller.state)
+                .frame(width: 120, height: 120)
+            Text("What can I help with?")
                 .font(.headline)
-            Text("This is where our conversations will live.")
+            Text("Ask me something, or tell me something worth remembering.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
         }
         .frame(maxWidth: .infinity)
     }
@@ -79,16 +75,31 @@ struct ConversationView: View {
     // MARK: - Composer
 
     private var composer: some View {
-        VStack(spacing: 10) {
-            PendingFeatureNotice(
-                stage: FeatureFlags.textConversation,
-                symbolName: "bubble.left.and.text.bubble.right"
-            )
+        VStack(spacing: 8) {
+            if let statusText = controller.statusText {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text(statusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Stop") {
+                        Task { await controller.cancel() }
+                    }
+                    .font(.caption)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            }
 
             HStack(alignment: .bottom, spacing: 10) {
                 TextField(
                     "Message \(environment.assistantName)",
-                    text: $draft,
+                    text: Binding(
+                        get: { controller.draft },
+                        set: { controller.draft = $0 }
+                    ),
                     axis: .vertical
                 )
                 .lineLimit(1...5)
@@ -97,17 +108,15 @@ struct ConversationView: View {
                 .padding(.vertical, 10)
                 .background(Color(.secondarySystemGroupedBackground), in: Capsule())
                 .focused($isComposerFocused)
-                .disabled(!FeatureFlags.textConversation.isLive)
+                .disabled(controller.isBusy)
+                .onSubmit(send)
 
-                Button {
-                    // No send path exists yet. Left empty rather than wired to a placebo.
-                } label: {
+                Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 30))
                 }
-                .disabled(true)
+                .disabled(!controller.canSend)
                 .accessibilityLabel("Send")
-                .accessibilityHint(FeatureFlags.textConversation.userFacingNote ?? "")
 
                 Button {
                     // Voice input arrives in Phase 5.
@@ -121,10 +130,91 @@ struct ConversationView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 12)
+        .padding(.top, 10)
         .padding(.bottom, 8)
         .background(.bar)
     }
+
+    private func send() {
+        Task { await controller.send() }
+    }
+}
+
+/// The message list for one conversation.
+///
+/// Separate from `ConversationView` so its `@Query` can be built from a specific conversation id.
+/// SwiftUI re-initialises this view when the id changes, which rebuilds the query — the supported way to
+/// scope a query to a value that is not known at compile time.
+@MainActor
+private struct TranscriptView: View {
+    private let conversationID: UUID
+    private let assistantName: String
+    private let streamingText: String?
+
+    @Query private var messages: [Message]
+
+    init(conversationID: UUID, assistantName: String, streamingText: String?) {
+        self.conversationID = conversationID
+        self.assistantName = assistantName
+        self.streamingText = streamingText
+        _messages = Query(
+            filter: #Predicate<Message> { $0.conversation?.id == conversationID },
+            sort: [
+                SortDescriptor(\Message.createdAt, order: .forward),
+                SortDescriptor(\Message.sequence, order: .forward)
+            ]
+        )
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(visibleMessages) { message in
+                        MessageRow(message: message.snapshot, assistantName: assistantName)
+                            // Row ids are strings throughout, including the streaming placeholder, so
+                            // `scrollTo` never has to match across two id types.
+                            .id(message.id.uuidString)
+                    }
+
+                    if let streamingText, !streamingText.isEmpty {
+                        MessageRow(
+                            message: MessageSnapshot(role: .assistant, content: streamingText),
+                            assistantName: assistantName
+                        )
+                        .id(Self.streamingRowID)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .defaultScrollAnchor(.bottom)
+            .onChange(of: messages.count) { _, _ in
+                scrollToEnd(proxy)
+            }
+            .onChange(of: streamingText) { _, _ in
+                scrollToEnd(proxy)
+            }
+        }
+    }
+
+    /// System and tool rows are internal bookkeeping, not part of the conversation.
+    private var visibleMessages: [Message] {
+        messages.filter { $0.role == .user || $0.role == .assistant }
+    }
+
+    private func scrollToEnd(_ proxy: ScrollViewProxy) {
+        let target: String? = (streamingText?.isEmpty == false)
+            ? Self.streamingRowID
+            : visibleMessages.last?.id.uuidString
+        guard let target else { return }
+        withAnimation(.easeOut(duration: 0.2)) {
+            proxy.scrollTo(target, anchor: .bottom)
+        }
+    }
+
+    private static let streamingRowID = "aura.streaming.row"
 }
 
 /// One turn in the transcript.
@@ -198,8 +288,7 @@ struct ToolActivityRow: View {
 }
 
 #Preview {
-    // `@Query` needs the same container the environment holds, so both are injected from one
-    // instance rather than two.
+    // `@Query` needs the same container the environment holds, so both come from one instance.
     let environment = AppEnvironment.preview()
     NavigationStack {
         ConversationView()

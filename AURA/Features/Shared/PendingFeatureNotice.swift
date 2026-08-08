@@ -58,7 +58,7 @@ struct PendingFeatureScreen: View {
 
 #Preview {
     VStack(spacing: 16) {
-        PendingFeatureNotice(stage: FeatureFlags.textConversation, symbolName: "bubble.left")
+        PendingFeatureNotice(stage: FeatureFlags.tools, symbolName: "wrench.and.screwdriver")
         PendingFeatureNotice(stage: FeatureFlags.voiceInput, symbolName: "mic")
         PendingFeatureScreen(title: "Activity", stage: FeatureFlags.activityLog)
     }

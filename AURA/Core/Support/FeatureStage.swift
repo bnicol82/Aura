@@ -45,12 +45,13 @@ enum FeatureStage: Sendable, Equatable {
 /// tool is declared pending, with the note the UI shows.
 enum FeatureFlags {
 
-    /// Typed conversation with the assistant. Needs `LanguageModelProvider` and the orchestrator.
-    static let textConversation = FeatureStage.pending(
-        phase: 2,
-        phaseName: "Basic Intelligence",
-        note: "I can't answer yet — my language model isn't connected. That's the next thing being built."
-    )
+    /// Typed conversation with the assistant.
+    ///
+    /// Live as of Phase 2: `AppleFoundationModelProvider`, `DefaultModelRouter`,
+    /// `AssistantOrchestrator` and `SwiftDataConversationStore` are all real. What a given device can
+    /// actually do still depends on Apple Intelligence being available there — that is a runtime
+    /// question answered by `ModelAvailability`, not a build-stage one.
+    static let textConversation = FeatureStage.live
 
     /// Voice input.
     static let voiceInput = FeatureStage.pending(
@@ -67,11 +68,11 @@ enum FeatureFlags {
     )
 
     /// Saved conversation history.
-    static let conversationHistory = FeatureStage.pending(
-        phase: 6,
-        phaseName: "Conversation Persistence",
-        note: "Conversations aren't being saved yet."
-    )
+    ///
+    /// Live as of Phase 2 rather than Phase 6: the orchestrator has to persist a turn to have anywhere
+    /// to put it, so `SwiftDataConversationStore` arrived with it. Phase 6's remaining work is history
+    /// browsing and archive search UI, not the storage itself.
+    static let conversationHistory = FeatureStage.live
 
     /// Automatic and explicit memory.
     static let memory = FeatureStage.pending(
