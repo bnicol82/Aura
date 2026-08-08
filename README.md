@@ -2,6 +2,8 @@
 
 A private, on-device-first personal AI assistant for iPhone.
 
+[![Build and test](https://github.com/bnicol82/Aura/actions/workflows/build.yml/badge.svg)](https://github.com/bnicol82/Aura/actions/workflows/build.yml)
+
 AURA is a native SwiftUI application built around six pillars: **Intelligence, Personality,
 Memory, Action, Privacy, Continuity**. It is not a chat client — it is a personal AI layer that
 remembers what matters to you, speaks in a voice you choose, and can actually do things.
@@ -26,10 +28,37 @@ AURA runs on any iOS 26 device. On hardware without Apple Intelligence it degrad
 memory, profiles, conversation history, search and the UI all work; language-model replies require
 either an eligible device or a deliberately configured cloud provider.
 
-## Getting started
+## Building without a Mac
 
-You need a **Mac** with **Xcode 26 or later**. Xcode is a free download from the Mac App Store; it is
-large (10 GB or so), and you should open it once after installing so it can finish setting itself up.
+**You do not need a Mac to build this.** Every push is compiled and tested on GitHub's macOS runners,
+which are free for public repositories. Open the
+[**Actions tab**](https://github.com/bnicol82/Aura/actions) — from a phone browser or the GitHub
+mobile app — and the newest run shows a summary: the Xcode version used, whether it built, and the
+exact compiler errors if it did not.
+
+Nothing to install, nothing to configure. Pushing a commit is what starts a build.
+
+`.github/workflows/build.yml` runs the same `Scripts/build.sh` and `Scripts/test.sh` that a local Mac
+would, so CI and a laptop cannot drift apart.
+
+### Actually running AURA on an iPhone
+
+Compiling and *installing* are different problems. Installing on a physical iPhone needs a signing
+identity, and there are exactly two routes:
+
+| Route | Needs a Mac? | Cost |
+|---|---|---|
+| Xcode → plug in iPhone → `⌘R` (app expires after 7 days) | Yes | Free |
+| CI builds a signed archive → upload to TestFlight → install via the TestFlight app | **No** | Apple Developer Program, $99/year |
+
+The second route needs no Mac at any point: an App Store Connect API key lets CI sign and upload, and
+TestFlight installs onto the phone like any other app. It is a separate piece of setup from the build
+workflow above, worth doing once the code is green.
+
+## Building on a Mac
+
+If you do have one: **Xcode 26 or later**, a free download from the Mac App Store. It is large
+(10 GB or so), and you should open it once after installing so it can finish setting itself up.
 
 Then, in Terminal:
 
@@ -115,6 +144,7 @@ AURA/
   Features/         Assistant, Memory, Activity, Settings, Onboarding
 AURATests/          Swift Testing suites
 Scripts/            build.sh, test.sh — one-command build and test
+.github/workflows/  CI: builds and tests every push on a macOS runner
 docs/               architecture and per-stage build log
 ```
 

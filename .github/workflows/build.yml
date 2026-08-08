@@ -1,0 +1,182 @@
+name: Build and test
+
+# Why this exists
+#
+# AURA is an iOS app, and Xcode only runs on macOS. When the person maintaining this repository has no
+# Mac, GitHub's macOS runners *are* the compiler — and for a public repository they are free. Every
+# push is built and tested here, so "does it compile" is answered by the repository rather than by
+# whoever happens to own a laptop.
+#
+# The error report is echoed into the job log on purpose, between clear markers. That makes it readable
+# through the GitHub API, which is how an agent working on this repo reads its own compiler output.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A newer push supersedes an older one. No point burning ten minutes compiling a commit that has
+# already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test (iOS Simulator)
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Report and select toolchain
+        run: |
+          echo "===== TOOLCHAIN ====="
+          sw_vers
+          echo
+          echo "Xcode versions present on this runner:"
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "  (none found)"
+          echo
+
+          DEFAULT_VERSION=$(xcodebuild -version 2>/dev/null | head -1 || echo "unknown")
+          echo "Default: $DEFAULT_VERSION"
+
+          DEFAULT_MAJOR=$(echo "$DEFAULT_VERSION" | sed -E 's/Xcode ([0-9]+).*/\1/')
+
+          # AURA targets iOS 26, so FoundationModels and the new Speech API need Xcode 26+. If the
+          # runner's default is older, switch to the newest one installed rather than failing on an
+          # import error that looks like a code bug but is a toolchain problem.
+          if ! [ "$DEFAULT_MAJOR" -ge 26 ] 2>/dev/null; then
+            NEWEST=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+            if [ -n "$NEWEST" ]; then
+              echo "Default is older than Xcode 26 — switching to $NEWEST"
+              sudo xcode-select -s "$NEWEST/Contents/Developer"
+            fi
+          fi
+
+          echo
+          echo "Selected: $(xcodebuild -version | head -1)"
+          echo "Swift:    $(swift --version 2>&1 | head -1)"
+
+          {
+            echo "## Toolchain"
+            echo "- macOS: \`$(sw_vers -productVersion)\`"
+            echo "- Xcode: \`$(xcodebuild -version | head -1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate the project file
+        id: project
+        run: |
+          # AURA.xcodeproj was hand-authored without Xcode, so it being unreadable is a known
+          # possibility with a known fix rather than a mystery. Check it explicitly, and regenerate from
+          # the checked-in XcodeGen spec if Xcode rejects it.
+          if xcodebuild -list -project AURA.xcodeproj > /tmp/project-list.txt 2>&1; then
+            echo "Project file is readable."
+            cat /tmp/project-list.txt
+            echo "regenerated=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Xcode could not read AURA.xcodeproj:"
+            cat /tmp/project-list.txt
+            echo
+            echo "Regenerating from project.yml with XcodeGen..."
+            brew install xcodegen
+            xcodegen generate
+            xcodebuild -list -project AURA.xcodeproj
+            echo "regenerated=true" >> "$GITHUB_OUTPUT"
+            echo "> ⚠️ \`AURA.xcodeproj\` was rejected by Xcode and regenerated from \`project.yml\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: ./Scripts/build.sh
+
+      - name: Report build result
+        if: always()
+        run: |
+          echo "===== BEGIN BUILD REPORT ====="
+          if [ -s build/errors.txt ]; then
+            cat build/errors.txt
+          else
+            echo "(no errors or warnings recorded)"
+          fi
+          echo "===== END BUILD REPORT ====="
+
+          {
+            echo "## Build"
+            if [ "${{ steps.build.outcome }}" = "success" ]; then
+              echo "✅ **Succeeded**"
+            else
+              echo "❌ **Failed**"
+            fi
+            echo
+            if [ -s build/errors.txt ]; then
+              ERRORS=$(grep -c "error: " build/errors.txt || true)
+              WARNINGS=$(grep -c "warning: " build/errors.txt || true)
+              echo "${ERRORS:-0} error(s), ${WARNINGS:-0} warning(s)"
+              echo
+              echo '```'
+              # Capped so a wall of warnings cannot bury the errors in the summary view.
+              grep "error: " build/errors.txt | head -60 || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test
+        id: test
+        # Pointless to run when nothing compiled — and a misleading "tests failed" would hide the
+        # actual cause.
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: ./Scripts/test.sh
+
+      - name: Report test result
+        if: always() && steps.build.outcome == 'success'
+        run: |
+          echo "===== BEGIN TEST REPORT ====="
+          if [ -s build/test-results.txt ]; then
+            cat build/test-results.txt
+          else
+            echo "(no failures recorded)"
+          fi
+          echo "===== END TEST REPORT ====="
+
+          {
+            echo "## Tests"
+            if [ "${{ steps.test.outcome }}" = "success" ]; then
+              echo "✅ **Passed**"
+            else
+              echo "❌ **Failed**"
+              echo
+              echo '```'
+              head -60 build/test-results.txt 2>/dev/null || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build/*.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Set job status
+        if: always()
+        run: |
+          # The build and test steps are `continue-on-error` so their reports always run. The job's own
+          # status has to reflect reality, so it is set explicitly here.
+          if [ "${{ steps.build.outcome }}" != "success" ]; then
+            echo "Build failed — see the build report above."
+            exit 1
+          fi
+          if [ "${{ steps.test.outcome }}" != "success" ]; then
+            echo "Tests failed — see the test report above."
+            exit 1
+          fi
+          echo "Build and tests both green."
