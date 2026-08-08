@@ -106,9 +106,9 @@ struct MemoryImportanceTests {
         // "Cancel my meetings for the rest of today" is a decision, about a date, involving people. Keeping
         // it forever would be actively wrong rather than merely useless.
         let signals = MemoryImportanceSignals(
+            involvesImportantPerson: true,
             isDecision: true,
             containsImportantDate: true,
-            involvesImportantPerson: true,
             isTransient: true,
             category: .temporaryContext
         )
@@ -132,8 +132,8 @@ struct MemoryImportanceTests {
     func projectDecisionIsEpisodic() {
         // §2's own example: holding the garage renovation until October.
         let signals = MemoryImportanceSignals(
-            isDecision: true,
             involvesProject: true,
+            isDecision: true,
             category: .household
         )
         let score = scorer.importance(for: signals)
