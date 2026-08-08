@@ -28,8 +28,9 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       codeCoverageEnabled = "YES">
-      <TestPlans>
-      </TestPlans>
+      <!-- No <TestPlans> element on purpose. Declaring one — even empty — makes Xcode treat the scheme
+           as test-plan-based and ignore <Testables> completely, which surfaces as
+           "Scheme AURA is not currently configured for the test action". -->
       <Testables>
          <TestableReference
             skipped = "NO">

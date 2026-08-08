@@ -71,7 +71,12 @@ STATUS=$?
 # --- Report -----------------------------------------------------------------------------------
 
 # Absolute paths are trimmed to repo-relative so the report is readable and portable.
+#
+# `appintentsmetadataprocessor` is filtered out: it warns that no AppIntents.framework dependency was
+# found, which is simply true until Phase 11 adds one. Leaving it in would mean the report is never
+# empty, and a report that always has something in it stops being a signal.
 grep -E "(error|warning): " "$FULL_LOG" \
+    | grep -v "appintentsmetadataprocessor" \
     | sed -E 's#^.*/(AURA/|AURATests/)#\1#' \
     | sort -u \
     > "$REPORT"
