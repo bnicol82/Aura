@@ -28,17 +28,52 @@ either an eligible device or a deliberately configured cloud provider.
 
 ## Getting started
 
+You need a **Mac** with **Xcode 26 or later**. Xcode is a free download from the Mac App Store; it is
+large (10 GB or so), and you should open it once after installing so it can finish setting itself up.
+
+Then, in Terminal:
+
 ```bash
-git clone <this repo>
+# Point the command-line tools at Xcode (once, after installing it)
+sudo xcode-select -s /Applications/Xcode.app
+
+# Get the code
+git clone https://github.com/bnicol82/Aura.git
 cd Aura
-open AURA.xcodeproj
+git checkout claude/aura-ios-assistant-hc7m1s
+
+# Build it
+./Scripts/build.sh
 ```
 
-Then, once, in Xcode:
+`build.sh` compiles for the iOS **Simulator**, which needs **no Apple Developer account, no signing
+certificate and no team ID** — provisioning is a separate problem you only have to solve to run on a
+physical iPhone. It writes two files:
+
+| File | What it is |
+|---|---|
+| `build/errors.txt` | every unique error and warning, one per line — the file worth sharing |
+| `build/full.log` | complete output, for when a message needs surrounding context |
+
+Once it builds, run the test suites:
+
+```bash
+./Scripts/test.sh
+```
+
+It picks an available iPhone simulator automatically and writes `build/test-results.txt`.
+
+### Running on a real iPhone
+
+Only needed to actually use AURA, not to verify it compiles. In Xcode:
 
 1. Select the **AURA** target → **Signing & Capabilities** → set your own **Team**.
 2. Change `PRODUCT_BUNDLE_IDENTIFIER` from `com.aura.assistant` to a bundle ID you own.
-3. Build and run (`⌘R`). Tests: `⌘U`.
+3. Pick your iPhone from the device menu and press `⌘R`.
+
+Full features need an iPhone with Apple Intelligence enabled. Without it, AURA still runs — memory,
+profiles, search and the whole interface work, and it says plainly that the model is unavailable
+rather than failing silently.
 
 ### If the Xcode project will not open
 
@@ -79,6 +114,7 @@ AURA/
   Models/           SwiftData persistent models + Sendable snapshots
   Features/         Assistant, Memory, Activity, Settings, Onboarding
 AURATests/          Swift Testing suites
+Scripts/            build.sh, test.sh — one-command build and test
 docs/               architecture and per-stage build log
 ```
 
