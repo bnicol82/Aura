@@ -13,7 +13,8 @@ import Speech
 /// | `SpeechTranscriber.init(locale:preset:)` | iOS 26.0+, `Preset.progressiveTranscription` for live audio |
 /// | `SpeechTranscriber.results` | `some Sendable & AsyncSequence<Result, any Error>` |
 /// | `SpeechTranscriber.Result` | `text: AttributedString`, `isFinal: Bool`, `alternatives: [AttributedString]` |
-/// | `SpeechTranscriber.isAvailable` / `.supportedLocales` / `.installedLocales` | static |
+/// | `SpeechTranscriber.isAvailable` | static, **synchronous** |
+/// | `SpeechTranscriber.supportedLocales` / `.installedLocales` | static, **`async`** — see below |
 /// | `SpeechAnalyzer.init(modules:options:)` | `options` is optional |
 /// | `SpeechAnalyzer.start(inputSequence:)` | `async throws` |
 /// | `SpeechAnalyzer.finalizeAndFinishThroughEndOfInput()` / `.cancelAndFinishNow()` | `async throws` / `async` |
@@ -25,6 +26,14 @@ import Speech
 /// `SpeechTranscriber.Result.text` is an `AttributedString`, not a `String` — the attributes carry
 /// confidence and timing. AURA wants the plain text, so it is extracted rather than interpolated, because
 /// interpolating an `AttributedString` produces a description with markup in it.
+///
+/// ### Where documentation was not enough
+/// `supportedLocales` and `installedLocales` are `async`. Apple's reference page lists them as `static var`
+/// without showing the `get async` accessor, and taking that at face value cost a build: four call sites
+/// failed with "expression is 'async' but is not marked with 'await'". Worth recording because the lesson is
+/// narrower than "verify the API" — the signatures *were* verified, and a rendered doc page still omitted the
+/// effect. A property's asynchrony does not show up in the shape of a call, so the compiler is the only real
+/// authority on it.
 ///
 /// ### Authorization
 /// Both microphone **and** speech-recognition authorization are required; the new API did not remove the
@@ -69,12 +78,12 @@ actor SystemSpeechRecognitionService: SpeechRecognitionService {
         }
 
         let locale = Locale.current
-        guard let resolved = Self.bestSupportedLocale(for: locale, in: SpeechTranscriber.supportedLocales) else {
+        guard let resolved = Self.bestSupportedLocale(for: locale, in: await SpeechTranscriber.supportedLocales) else {
             return .unsupportedLocale(locale)
         }
         // Supported but not installed means the assets still have to come down, which is a visible wait
         // rather than a failure — `prepare(locale:)` is what resolves it.
-        if Self.bestSupportedLocale(for: resolved, in: SpeechTranscriber.installedLocales) == nil {
+        if Self.bestSupportedLocale(for: resolved, in: await SpeechTranscriber.installedLocales) == nil {
             return .assetsDownloading
         }
         return .available
@@ -116,7 +125,7 @@ actor SystemSpeechRecognitionService: SpeechRecognitionService {
         guard SpeechTranscriber.isAvailable else {
             throw AuraError.speechRecognitionUnavailable(reason: "not supported on this device")
         }
-        guard let resolved = Self.bestSupportedLocale(for: locale, in: SpeechTranscriber.supportedLocales) else {
+        guard let resolved = Self.bestSupportedLocale(for: locale, in: await SpeechTranscriber.supportedLocales) else {
             throw AuraError.speechRecognitionUnavailable(reason: "no support for \(locale.identifier)")
         }
 
@@ -176,7 +185,7 @@ actor SystemSpeechRecognitionService: SpeechRecognitionService {
             throw AuraError.speechRecognitionUnavailable(reason: "already listening")
         }
 
-        guard let resolved = Self.bestSupportedLocale(for: locale, in: SpeechTranscriber.supportedLocales) else {
+        guard let resolved = Self.bestSupportedLocale(for: locale, in: await SpeechTranscriber.supportedLocales) else {
             throw AuraError.speechRecognitionUnavailable(reason: "no support for \(locale.identifier)")
         }
 
