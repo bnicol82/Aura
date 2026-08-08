@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Fastlane / CI artifacts
+fastlane/report.xml
+fastlane/screenshots/
+*.xcresult
+
+# Local secrets — never commit these
+Configuration/Local.xcconfig
+Configuration/AURA.entitlements
+*.p8
+*.p12
+*.mobileprovision

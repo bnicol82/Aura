@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  AURA entitlements TEMPLATE.
+
+  This file is deliberately NOT wired to CODE_SIGN_ENTITLEMENTS, because an iCloud container that
+  does not exist in your developer account makes the app fail to provision. CloudKit sync is a
+  Phase 9 deliverable.
+
+  To enable iCloud sync:
+    1. cp Configuration/AURA.entitlements.template Configuration/AURA.entitlements
+    2. Replace iCloud.com.aura.assistant with a container you own.
+    3. In the AURA target's build settings set:
+         CODE_SIGN_ENTITLEMENTS = Configuration/AURA.entitlements
+    4. Add the `remote-notification` background mode:
+         INFOPLIST_KEY_UIBackgroundModes = remote-notification
+    5. Flip SyncConfiguration.default to .cloudKit(containerIdentifier:) in
+       AURA/Core/Storage/SyncConfiguration.swift.
+
+  Configuration/AURA.entitlements is git-ignored so your container identifier stays local.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.aura.assistant</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.ubiquity-container-identifiers</key>
+	<array>
+		<string>iCloud.com.aura.assistant</string>
+	</array>
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>
