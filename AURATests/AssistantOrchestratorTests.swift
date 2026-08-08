@@ -345,6 +345,97 @@ struct AssistantOrchestratorTests {
         #expect(labels.contains("delta"))
     }
 
+    // MARK: Rolling summary
+
+    @Test("Turns that age out of working memory are folded into a summary, and sent on the next turn")
+    func rollsUpAgedOutTurnsIntoASummary() async throws {
+        let harness = try Harness(behavior: .respond("Noted."))
+
+        // Each turn writes two messages, so this pushes the thread past `workingMemoryTurnLimit` and forces
+        // turns out of the window. Without a summary those turns would be silently forgotten while the
+        // assistant still appeared to remember the whole conversation.
+        let turnsNeeded = AuraDefaults.workingMemoryTurnLimit / 2 + 2
+        for index in 0..<turnsNeeded {
+            _ = await harness.orchestrator.send(AssistantRequest(text: "Message number \(index)."))
+        }
+
+        let conversationID = try #require(
+            await harness.conversationStore.mostRecentActiveConversation(
+                staleAfter: 3600, now: Date()
+            )?.id
+        )
+
+        let stored = try #require(
+            await harness.conversationStore.conversation(id: conversationID)?.summary
+        )
+        #expect(stored == "Noted.")
+
+        // The summarisation pass must be a separate, purpose-tagged request — not folded into the
+        // conversation turn, which would let it inherit conversation temperature and tool access.
+        let summaryRequests = harness.provider.requests.filter { $0.purpose == .summarization }
+        #expect(!summaryRequests.isEmpty)
+        let summaryRequest = try #require(summaryRequests.last)
+        #expect(summaryRequest.options.allowsToolUse == false)
+        #expect(summaryRequest.instructions.contains("Do not infer"))
+
+        // And the summary has to actually reach the model on a later turn, or writing it achieved nothing.
+        _ = await harness.orchestrator.send(AssistantRequest(text: "What have we covered?"))
+        let conversationRequests = harness.provider.requests.filter { $0.purpose == .conversation }
+        let latest = try #require(conversationRequests.last)
+        #expect(latest.conversationSummary == "Noted.")
+    }
+
+    @Test("A short conversation gets no summary, and no summarisation request")
+    func shortConversationIsNotSummarised() async throws {
+        let harness = try Harness()
+
+        _ = await harness.orchestrator.send(AssistantRequest(text: "Hello."))
+
+        let conversationID = try #require(
+            await harness.conversationStore.mostRecentActiveConversation(
+                staleAfter: 3600, now: Date()
+            )?.id
+        )
+        // Nothing has aged out, so there is nothing to condense. Summarising here would spend a model call
+        // to restate messages the model can already see in full.
+        #expect(try await harness.conversationStore.conversation(id: conversationID)?.summary == nil)
+        #expect(harness.provider.requests.allSatisfy { $0.purpose != .summarization })
+    }
+
+    @Test("The summary prompt labels roles and states whether it is rewriting or starting fresh")
+    func summaryPromptShape() {
+        let turns = [
+            MessageSnapshot(role: .user, content: "I'm saving the garage until October."),
+            MessageSnapshot(role: .assistant, content: "Got it — October.")
+        ]
+
+        let fresh = AssistantOrchestrator.summaryPrompt(previous: nil, newlyAgedOut: turns)
+        #expect(fresh.contains("User: I'm saving the garage until October."))
+        #expect(fresh.contains("Assistant: Got it — October."))
+        #expect(fresh.contains("Summarise these turns."))
+        #expect(!fresh.contains("The summary so far"))
+
+        let rolled = AssistantOrchestrator.summaryPrompt(
+            previous: "Alex is renovating a garage.",
+            newlyAgedOut: turns
+        )
+        #expect(rolled.contains("Alex is renovating a garage."))
+        #expect(rolled.contains("covers the earlier summary and these turns together"))
+        // Rewriting and starting fresh are different instructions; conflating them would produce a summary
+        // that either drops the earlier material or restates it twice.
+        #expect(!rolled.contains("Summarise these turns."))
+    }
+
+    @Test("A blank previous summary is treated as no summary rather than rewritten")
+    func summaryPromptIgnoresBlankPrevious() {
+        let prompt = AssistantOrchestrator.summaryPrompt(
+            previous: "   \n ",
+            newlyAgedOut: [MessageSnapshot(role: .user, content: "Anything.")]
+        )
+        #expect(!prompt.contains("The summary so far"))
+        #expect(prompt.contains("Summarise these turns."))
+    }
+
     @Test("The persisted answer comes from the provider's finished response, not from the deltas")
     func persistsFinishedTextRatherThanAccumulatedDeltas() async throws {
         // The two can differ, and when they do the store must match what the provider actually concluded.

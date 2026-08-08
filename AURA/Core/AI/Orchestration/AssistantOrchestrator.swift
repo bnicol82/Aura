@@ -218,6 +218,10 @@ actor AssistantOrchestrator: AssistantOrchestrating {
                 // together are exactly what `modelInstructions` used to be — see `combinedInstructions`.
                 instructions: context.stableInstructions,
                 turnContext: context.turnContext(now: request.now),
+                // What the thread said before it aged out of `history`. Without it, a long conversation
+                // silently forgets its own beginning while appearing to remember everything.
+                conversationSummary: try await conversationStore
+                    .conversation(id: conversationID)?.summary,
                 messages: Self.modelMessages(history: history, latestUserText: text),
                 tools: [],
                 options: .conversation,
@@ -273,6 +277,11 @@ actor AssistantOrchestrator: AssistantOrchestrating {
             )
 
             emit(.finished(response))
+
+            // After `.finished`, deliberately: the user has their answer and the UI is idle, so the only
+            // cost of doing this here rather than in a detached task is that the event stream stays open a
+            // moment longer. In exchange it is sequenced and testable, instead of a race.
+            await refreshRollingSummary(conversationID: conversationID)
         } catch {
             let auraError = error.asAuraError
             await recordFailure(
@@ -323,6 +332,126 @@ actor AssistantOrchestrator: AssistantOrchestrating {
             throw AuraError.emptyModelResponse
         }
         return finished
+    }
+
+    // MARK: - Rolling summary
+
+    /// Condenses the turns that have aged out of working memory, so a long thread stays coherent (§18).
+    ///
+    /// ### Why it is incremental
+    /// The input is the previous summary plus the most recently aged-out turns, not the whole history. A
+    /// thread hundreds of turns long would otherwise overflow the context window of the very model being
+    /// asked to summarise it.
+    ///
+    /// ### The bound, stated honestly
+    /// Coverage is not tracked in the store — there is no field for it, and adding one would mean a schema
+    /// version for a single integer. Instead this relies on being called after **every** turn, which keeps
+    /// the number of newly-aged-out turns at roughly two, well inside the window fed back in.
+    ///
+    /// The window is `workingMemoryTurnLimit`, so roughly six consecutive failed refreshes could pass before
+    /// a turn ages out without ever reaching a summary. That is the real limitation: it is bounded, it
+    /// self-heals on the next success within the window, and it is written down rather than presented as
+    /// exact.
+    ///
+    /// Every failure is swallowed. A summary is an enhancement to a turn that has already succeeded, and
+    /// failing to write one must never surface as an error about the answer the user just received.
+    private func refreshRollingSummary(conversationID: UUID) async {
+        do {
+            // Failures are excluded for the same reason working memory excludes them: an error message is a
+            // record for the user, not something to summarise as if the assistant had said it (§78).
+            let visible = try await conversationStore
+                .messages(inConversationID: conversationID)
+                .filter { !$0.isFailure && ($0.role == .user || $0.role == .assistant) }
+
+            let limit = AuraDefaults.workingMemoryTurnLimit
+            let agedOutCount = max(0, visible.count - limit)
+            guard agedOutCount > 0 else { return }
+
+            let newlyAgedOut = Array(visible.prefix(agedOutCount).suffix(limit))
+            guard !newlyAgedOut.isEmpty else { return }
+
+            let existing = try await conversationStore.conversation(id: conversationID)?.summary
+            let assistantProfile = try await assistantProfileStore.currentProfile()
+            let isOnline = await networkMonitor.isOnline
+
+            let (provider, _) = try await router.route(
+                purpose: .summarization,
+                context: RoutingContext(
+                    aiMode: assistantProfile.aiMode,
+                    isOnline: isOnline,
+                    requiresToolSupport: false
+                )
+            )
+
+            let summaryRequest = ModelRequest(
+                instructions: Self.summaryInstructions,
+                messages: [.user(Self.summaryPrompt(previous: existing, newlyAgedOut: newlyAgedOut))],
+                options: .structured,
+                purpose: .summarization
+            )
+
+            let response = try await provider.send(summaryRequest, toolInvoker: nil)
+            let summary = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !summary.isEmpty else { return }
+
+            try await conversationStore.updateSummary(summary, conversationID: conversationID)
+        } catch {
+            AuraLog.orchestrator.debug(
+                "Rolling summary not refreshed: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    /// Instructions for the summarisation pass.
+    ///
+    /// Written to constrain invention as hard as the prompt can: a summary that adds a detail nobody said
+    /// becomes indistinguishable from something the user actually told AURA, and would then be recalled as
+    /// fact for the rest of the conversation. That is the §78 failure with the longest reach.
+    static let summaryInstructions = """
+        You are condensing part of a conversation so it can be remembered after the full text is gone.
+
+        Write a compact account of what was discussed, decided, and asked for. Keep names, numbers, dates \
+        and commitments exactly as they appeared. Prefer plain sentences over bullet points.
+
+        Include only what is actually present in the material you are given. Do not infer, do not \
+        speculate, and do not add detail that is not there. If the material is thin, write a short summary \
+        rather than padding it.
+
+        Reply with the summary and nothing else — no preamble, no heading, no commentary.
+        """
+
+    /// Builds the summarisation prompt from the previous summary and the turns that have just aged out.
+    ///
+    /// `static` and pure so the exact text is assertable. A summary prompt that silently changes shape
+    /// changes what the assistant remembers about every long conversation.
+    static func summaryPrompt(previous: String?, newlyAgedOut: [MessageSnapshot]) -> String {
+        var sections: [String] = []
+
+        if let previous, !previous.isBlank {
+            sections.append("""
+                The summary so far, which already covers everything before the turns below:
+                \(previous)
+                """)
+        }
+
+        var lines = ["Turns to fold in:"]
+        for message in newlyAgedOut {
+            switch message.role {
+            case .assistant:
+                lines.append("Assistant: \(message.content)")
+            default:
+                lines.append("User: \(message.content)")
+            }
+        }
+        sections.append(lines.joined(separator: "\n"))
+
+        sections.append(
+            previous?.isBlank == false
+                ? "Rewrite the summary so it covers the earlier summary and these turns together."
+                : "Summarise these turns."
+        )
+
+        return sections.joined(separator: "\n\n")
     }
 
     private func resolveConversation(for request: AssistantRequest) async throws -> UUID {

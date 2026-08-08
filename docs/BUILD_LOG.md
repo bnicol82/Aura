@@ -281,12 +281,56 @@ test failure got reported as passing before the log was checked properly.
 Both report steps now print `STEP OUTCOME build=…` / `STEP OUTCOME test=…` into the job log, so the real
 result is greppable and no reader has to know that distinction to avoid being misled by it.
 
+### Rolling conversation summary
+
+The last Phase 3 item. Working memory is capped at twelve turns, so before this a long thread silently
+forgot its own beginning while still appearing to remember everything — the failure mode §78 cares most
+about, because the assistant has no way to know it has forgotten.
+
+Turns that age out are now condensed into `Conversation.summary` and replayed to the model. No schema change
+was needed: `Conversation.summary` and `ConversationStoring.updateSummary` have been there since Phase 1.
+
+**Where the summary goes.** `ModelRequest.conversationSummary`, replayed by the Apple provider as a labelled
+entry positioned *before* the surviving turns — because that is when it happened. Appended after them it
+would read as the most recent thing said. There is a test asserting the order for exactly that reason.
+
+It is deliberately **not** folded into `instructions`: the summary grows with the thread, and mixing it into
+the cacheable prefix would invalidate that prefix on every turn, undoing the split from the previous stage.
+
+**When it refreshes.** After `.finished` is emitted, so the user already has their answer. Sequenced rather
+than detached, which costs nothing the user can perceive — the event stream simply stays open a moment
+longer — and makes the behaviour testable instead of a race.
+
+**How incremental works, and the bound.** The input is the previous summary plus the most recently aged-out
+turns, never the whole history: a thread hundreds of turns long would otherwise overflow the context window
+of the model being asked to summarise it.
+
+Coverage is not tracked in the store. There is no field for it, and adding one means a schema version for a
+single integer. Instead this relies on running after *every* turn, which keeps the number of newly-aged-out
+turns at roughly two — well inside the twelve fed back in. The honest consequence: **roughly six consecutive
+failed refreshes could let a turn age out without ever reaching a summary.** It is bounded, it self-heals on
+the next success inside the window, and it is written down here rather than presented as exact.
+
+Also true and worth stating: the refresh reads all of a conversation's messages each turn once the window is
+exceeded, which is O(n) per turn. Fine at conversation scale, and the place to look first if long threads
+ever feel slow.
+
+**What the prompt guards against.** The summarisation instructions push against invention harder than
+anything else in the codebase, because a summary that adds a detail nobody said becomes indistinguishable
+from something the user actually told AURA — and is then recalled as fact for the rest of the conversation.
+That is the §78 failure with the longest reach. `summaryPrompt` is `static` and pure so the exact text is
+assertable, including that rewriting an existing summary and starting a fresh one are different
+instructions.
+
+### Phase 3 status
+
+All five items written. Streaming and transcript history are CI-verified; the context split, prewarming and
+this summary are pending a run.
+
 ### Next implementation step
 
-The last Phase 3 item: a rolling conversation summary, so threads longer than the working-memory window
-stay coherent. `Conversation.summary` and `ConversationStoring.updateSummary` already exist from Phase 1, so
-this needs no schema change — it needs a summarizer, a decision about when to refresh, and injection of the
-summary into the transcript.
+Phase 3 is feature-complete once the pending run is green. After that the open choices are Phase 5 (Voice),
+Phase 7 (automatic memory extraction), or TestFlight — none of which depends on the others.
 
 ---
 

@@ -126,6 +126,12 @@ struct ModelRequest: Sendable {
     /// re-processes stable text every turn pays for it. Providers that cannot exploit the split use
     /// `combinedInstructions` and see no difference.
     var turnContext: String?
+    /// A condensed account of the turns that have aged out of `messages`, so a long thread stays coherent
+    /// past the working-memory window. `nil` until something has actually aged out.
+    ///
+    /// Deliberately not folded into `instructions`: it changes as the conversation grows, and mixing it in
+    /// would invalidate the cacheable prefix on every turn.
+    var conversationSummary: String?
     var messages: [ModelMessage]
     var tools: [ToolDefinition]
     var options: ModelGenerationOptions
@@ -134,6 +140,7 @@ struct ModelRequest: Sendable {
     init(
         instructions: String,
         turnContext: String? = nil,
+        conversationSummary: String? = nil,
         messages: [ModelMessage],
         tools: [ToolDefinition] = [],
         options: ModelGenerationOptions = .conversation,
@@ -141,6 +148,7 @@ struct ModelRequest: Sendable {
     ) {
         self.instructions = instructions
         self.turnContext = turnContext
+        self.conversationSummary = conversationSummary
         self.messages = messages
         self.tools = tools
         self.options = options

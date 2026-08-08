@@ -149,6 +149,45 @@ struct AppleProviderTests {
         #expect(Self.kinds(of: entries) == ["prompt", "response"])
     }
 
+    @Test("A conversation summary is replayed before the surviving turns, not after them")
+    func transcriptPlacesSummaryBeforeHistory() {
+        let request = ModelRequest(
+            instructions: "You are Nova.",
+            conversationSummary: "Alex is renovating a garage.",
+            messages: [
+                .user("Where were we?"),
+                .assistant("You were pricing insulation."),
+                .user("Right, carry on.")
+            ]
+        )
+        let entries = Array(AppleFoundationModelProvider.makeTranscript(for: request))
+
+        // Order is the assertion: a summary appended after the surviving turns would read as the most recent
+        // thing said, which is the opposite of what it is.
+        #expect(Self.kinds(of: entries) == ["instructions", "prompt", "prompt", "response"])
+        #expect(Self.text(of: entries[1]).contains("Summary of earlier turns"))
+        #expect(Self.text(of: entries[1]).contains("Alex is renovating a garage."))
+        #expect(Self.text(of: entries[2]) == "Where were we?")
+    }
+
+    @Test("No summary means no summary entry, rather than an empty one")
+    func transcriptOmitsAbsentSummary() {
+        let withNil = ModelRequest(
+            instructions: "You are Nova.",
+            messages: [.user("A"), .assistant("B"), .user("C")]
+        )
+        #expect(Self.kinds(of: Array(AppleFoundationModelProvider.makeTranscript(for: withNil)))
+            == ["instructions", "prompt", "response"])
+
+        let withBlank = ModelRequest(
+            instructions: "You are Nova.",
+            conversationSummary: "   \n ",
+            messages: [.user("A"), .assistant("B"), .user("C")]
+        )
+        #expect(Self.kinds(of: Array(AppleFoundationModelProvider.makeTranscript(for: withBlank)))
+            == ["instructions", "prompt", "response"])
+    }
+
     @Test("Per-turn context rides with the prompt, not with the stable instructions")
     func turnContextRidesWithThePrompt() throws {
         // What makes the split worth having: the instructions entry stays byte-identical between turns so it

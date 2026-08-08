@@ -286,6 +286,24 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
             )))
         }
 
+        // Before the surviving turns, because that is where it happened. A summary appended after them
+        // would read as the most recent thing said.
+        //
+        // It goes in as a labelled prompt entry. `Transcript` has no "note about the conversation" entry
+        // other than `instructions`, and instructions is where the cacheable prefix lives — putting a
+        // summary that grows with the thread in there would invalidate that prefix every turn. Labelling it
+        // explicitly is honest about what it is, rather than passing it off as either party's words. Same
+        // reasoning as the tool-result case below.
+        if let summary = request.conversationSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !summary.isEmpty {
+            entries.append(.prompt(Transcript.Prompt(
+                id: UUID().uuidString,
+                segments: [textSegment("Summary of earlier turns in this conversation: \(summary)")],
+                options: GenerationOptions(),
+                responseFormat: nil
+            )))
+        }
+
         for message in request.messages.dropLast() {
             switch message.role {
             case .user:
