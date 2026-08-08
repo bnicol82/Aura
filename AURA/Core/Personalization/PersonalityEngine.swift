@@ -194,8 +194,8 @@ struct PersonalityEngine: Sendable {
     /// offline, work on hardware with no Apple Intelligence, and be identical every time the user
     /// flips back to a setting they already tried.
     func stylePreview(for profile: AssistantProfileSnapshot) -> String {
-        let name = profile.assistantName
-
+        // The previews are written in the assistant's voice but never name it — the name already
+        // appears above the preview in the UI, and repeating it inside the sample reads as stilted.
         if profile.personalityPreset == .custom,
            let custom = profile.customPersonalityPrompt,
            !custom.isBlank {

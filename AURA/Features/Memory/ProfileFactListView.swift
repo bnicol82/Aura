@@ -247,8 +247,14 @@ private struct CorrectFactSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section(fact.key) {
+                // The explicit `header:` form is required, not stylistic: SwiftUI has no
+                // `Section(_ title:, content:, footer:)` initializer — a title string and a footer
+                // closure cannot be combined. `Text(_:)` with a `StringProtocol` argument also keeps
+                // `fact.key` out of localization lookup, which is right for user-entered text.
+                Section {
                     TextField("Answer", text: $value)
+                } header: {
+                    Text(fact.key)
                 } footer: {
                     Text("I'll keep the old answer archived rather than deleting it, so you can see what changed.")
                 }

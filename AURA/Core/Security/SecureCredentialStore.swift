@@ -173,7 +173,9 @@ final class InMemoryCredentialStore: SecureCredentialStoring, @unchecked Sendabl
     }
 
     func delete(_ key: CredentialKey) throws {
-        lock.withLock { storage.removeValue(forKey: key) }
+        // `removeValue` returns the removed secret; discarding it explicitly, since holding a copy of a
+        // credential we were just asked to delete would defeat the point.
+        _ = lock.withLock { storage.removeValue(forKey: key) }
     }
 
     func deleteAll() throws {
