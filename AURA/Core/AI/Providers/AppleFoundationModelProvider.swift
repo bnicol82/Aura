@@ -227,6 +227,66 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
         return (session, promptText)
     }
 
+    // MARK: - Guided generation
+
+    /// Generates a `@Generable` value rather than prose.
+    ///
+    /// Outside `LanguageModelProvider` on purpose: guided generation is Apple-specific, and putting it on the
+    /// protocol would oblige every provider — including cloud ones and the mock — to fake a schema they cannot
+    /// honour. A caller that needs structure asks for this provider explicitly and does nothing if it is not
+    /// the one routed, which is what `ModelMemoryExtractor` does.
+    ///
+    /// Verified: `respond(to:generating:includeSchemaInPrompt:options:)` is
+    /// `async throws -> Response<Content> where Content: Generable`, and `Response.content` is the value.
+    ///
+    /// `includeSchemaInPrompt` stays `true`. The default costs prompt tokens but makes the model far likelier
+    /// to fill every field, and a half-populated extraction is worse than a slower one.
+    func generate<Content: Generable>(
+        _ type: Content.Type,
+        instructions: String,
+        prompt: String,
+        options: ModelGenerationOptions = .structured
+    ) async throws -> Content {
+        let availability = Self.mapAvailability(model.availability)
+        guard availability.isAvailable else {
+            throw AuraError.onDeviceModelUnavailable(availability)
+        }
+
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty else {
+            throw AuraError.emptyModelResponse
+        }
+
+        let session = LanguageModelSession(
+            model: model,
+            tools: [],
+            transcript: Transcript(entries: [
+                .instructions(Transcript.Instructions(
+                    id: UUID().uuidString,
+                    segments: [Self.textSegment(instructions)],
+                    toolDefinitions: []
+                ))
+            ])
+        )
+
+        do {
+            try Task.checkCancellation()
+            let response = try await session.respond(
+                to: Prompt { trimmedPrompt },
+                generating: type,
+                includeSchemaInPrompt: true,
+                options: Self.generationOptions(for: options)
+            )
+            return response.content
+        } catch is CancellationError {
+            throw AuraError.cancelled
+        } catch let error as AuraError {
+            throw error
+        } catch {
+            throw Self.mapGenerationError(error)
+        }
+    }
+
     // MARK: - Snapshot diffing
 
     /// What a new cumulative snapshot adds to what has already been sent downstream.
