@@ -33,6 +33,7 @@ enum ScreenshotMode {
         case onboardingReady
         case home
         case conversation
+        case conversationHistory
         case memoryHome
         case aboutYou
         case people
@@ -264,6 +265,8 @@ struct ScreenshotHostView: View {
             MainTabView()
         case .conversation:
             NavigationStack { ConversationView() }
+        case .conversationHistory:
+            NavigationStack { ConversationHistoryView() }
         case .memoryHome:
             MemoryHomeView()
         case .aboutYou:

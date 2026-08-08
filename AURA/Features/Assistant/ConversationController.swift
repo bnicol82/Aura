@@ -266,6 +266,19 @@ final class ConversationController {
         Task { await orchestrator.prewarm() }
     }
 
+    /// Switches the screen to an existing conversation, from history.
+    ///
+    /// Refuses while a turn is in flight: repointing mid-answer would file the reply under a conversation the
+    /// user was no longer looking at.
+    func open(conversationID id: UUID) {
+        guard !isBusy else { return }
+        conversationID = id
+        streamingText = nil
+        errorMessage = nil
+        voiceUnavailableMessage = nil
+        state = .idle
+    }
+
     /// Starts a fresh conversation on the next turn.
     func startNewConversation() {
         guard !isBusy else { return }

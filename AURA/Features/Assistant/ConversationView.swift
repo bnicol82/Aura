@@ -11,6 +11,7 @@ struct ConversationView: View {
     @Environment(AppEnvironment.self) private var environment
 
     @FocusState private var isComposerFocused: Bool
+    @State private var isShowingHistory = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,6 +31,20 @@ struct ConversationView: View {
                 }
                 .disabled(controller.isBusy || controller.conversationID == nil)
             }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    isShowingHistory = true
+                } label: {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
+                .disabled(!FeatureFlags.conversationHistory.isLive)
+            }
+        }
+        // A sheet rather than a push: history is a place you dip into and come back from, and it has to be
+        // reachable from the conversation it will send you back to.
+        .sheet(isPresented: $isShowingHistory) {
+            NavigationStack { ConversationHistoryView() }
         }
         .task { await controller.prepare() }
         .errorAlert(title: "That didn't work", message: Binding(
