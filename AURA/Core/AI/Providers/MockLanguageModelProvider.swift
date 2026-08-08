@@ -20,6 +20,13 @@ final class MockLanguageModelProvider: LanguageModelProvider, @unchecked Sendabl
         case fail(AuraError)
         /// Echo the last user message, prefixed. Useful for asserting what context was assembled.
         case echo(prefix: String)
+        /// Stream exactly these deltas, then finish with different text.
+        ///
+        /// Exists to make one invariant testable: the persisted answer comes from the provider's
+        /// `.finished` response, not from concatenating the deltas. Every other behaviour derives its
+        /// deltas *from* the final text by splitting it, so the two always agree and a test built on them
+        /// proves nothing. Here they disagree by construction.
+        case streamDivergently(deltas: [String], thenFinish: String)
     }
 
     let id: LanguageModelProviderID
@@ -135,6 +142,10 @@ final class MockLanguageModelProvider: LanguageModelProvider, @unchecked Sendabl
             let lastUserText = request.messages.last { $0.role == .user }?.text ?? ""
             return makeResponse(text: prefix + lastUserText)
 
+        case .streamDivergently(_, let thenFinish):
+            // Non-streaming callers see only the final text, which is the whole point of it being final.
+            return makeResponse(text: thenFinish)
+
         case .requestTool(let name, let arguments, let thenRespond):
             switch toolExecutionStyle {
             case .providerManaged:
@@ -176,6 +187,17 @@ final class MockLanguageModelProvider: LanguageModelProvider, @unchecked Sendabl
             let task = Task {
                 do {
                     let response = try await send(request, toolInvoker: toolInvoker)
+
+                    if case .streamDivergently(let deltas, _) = lock.withLock({ behavior }) {
+                        for delta in deltas {
+                            try Task.checkCancellation()
+                            continuation.yield(.textDelta(delta))
+                        }
+                        continuation.yield(.finished(response))
+                        continuation.finish()
+                        return
+                    }
+
                     // Emit word by word so streaming UI and cancellation are genuinely exercised
                     // rather than trivially satisfied by one large chunk.
                     for word in response.text.split(separator: " ", omittingEmptySubsequences: false) {

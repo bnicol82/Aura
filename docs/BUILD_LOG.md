@@ -130,8 +130,12 @@ reports on the work needs the same scepticism as the work.
 
 ## Phase 3 — Streaming and transcript history
 
-**Status: written, not yet verified.** This entry is being written before CI has compiled it; the
-verification line gets filled in from the run, not from optimism.
+**Status: compiled and tested.** Verified by CI run 11 — 0 errors, 0 warnings, **220 tests in 26 suites**
+passing. That is the first test count from the repaired counter in `test.sh`; the numbers this file used to
+quote, 210 and 241, were both artefacts of the old one.
+
+Run 10 built clean but failed one test. It was this stage's own new test, and it failed on the guard
+assertion deliberately put there to check the test's own premise — details under *Tests* below.
 
 Two of Phase 3's five items. The remaining three — `prewarm()`, a rolling conversation summary, and
 splitting `PersonalizationContext` into stable instructions plus per-turn context — are next.
@@ -158,9 +162,8 @@ concatenate into nonsense on screen.
 **`.finished` is the authority on the final text, not the accumulated deltas.** They agree in the normal
 case, but if they ever disagree the persisted message must match what the provider concluded rather than
 what the UI happened to assemble. A stream that ends without `.finished` throws instead of persisting
-whatever text arrived. There is a test for this that only works because the mock provider's delta
-reassembly differs from its finished text on repeated spaces — and it asserts that difference, so it
-cannot quietly stop proving anything.
+whatever text arrived. Testing this needed a mock that diverges deliberately; see *The test that caught
+itself* below.
 
 ### History as a Transcript, not as prose about history
 
@@ -185,12 +188,16 @@ on it: `streamResponse(to:options:)` returning `sending ResponseStream<String>`,
 initialisers for `Transcript`, `Transcript.Instructions`, `Transcript.Prompt`, `Transcript.Response` and
 `Transcript.TextSegment`.
 
-**One thing could not be verified, and is flagged rather than hidden.** `Generable` declares
+**One thing could not be verified from documentation, and the compiler settled it.** `Generable` declares
 `associatedtype PartiallyGenerated: ConvertibleFromGeneratedContent = Self`, and Apple does not publicly
-document `String`'s conformance — so whether `Snapshot.content` is a `String` is unconfirmed. The code
-annotates it `String` explicitly for exactly that reason: if the resolution is wrong, the compiler fails
-and names the real type. That is a deliberate choice of a loud failure over `String(describing:)`, which
-would compile against anything and ship mangled text.
+document `String`'s conformance — so whether `Snapshot.content` is a `String` was unknown. The code annotates
+it `String` explicitly for exactly that reason: a wrong resolution fails the build and names the real type,
+which is a loud failure chosen over `String(describing:)` that would compile against anything and ship
+mangled text.
+
+**It compiled.** `String.PartiallyGenerated` is `String`, the protocol's default applies, and Apple simply
+does not publish the conformance. Now known from a compiler rather than assumed from a default — and the
+annotation stays, because it is what would catch the change if a future SDK overrode it.
 
 ### Tests added
 
@@ -199,6 +206,27 @@ compiler catches it. Beyond the three obvious cases there is a property test tha
 sentence through as one snapshot per character and asserts the reassembly is byte-identical to the
 original. `makeTranscript` is tested for entry shape, for excluding the live turn, and for omitting a
 blank instructions entry.
+
+#### The test that caught itself
+
+The test for "the persisted answer comes from `.finished`, not from the deltas" needs a provider whose
+deltas genuinely disagree with its final text. The first version tried to get that for free from
+`.respond("one  two")`, reasoning that the mock's split-on-space streaming would reassemble the doubled
+space as three. **It does not** — splitting and rejoining is lossless, and the arithmetic behind that guess
+was simply wrong.
+
+Nothing about the invariant was broken. What was broken was the test: it would have passed while
+distinguishing nothing, and it would have sat there indefinitely looking like coverage. What caught it was
+the guard assertion written alongside it — the one asserting that the two values *do* differ, on the
+principle that a test resting on a premise should check the premise.
+
+The fix is a `streamDivergently(deltas:thenFinish:)` behaviour on the mock, which diverges by construction
+instead of by accident. Every other mock behaviour derives its deltas *from* the final text, so no test built
+on them can distinguish the two — that limitation is now stated where the behaviour is declared.
+
+The general lesson, and the reason it is written down: a test whose premise is an assumption about *other
+test infrastructure* is worth exactly as much as that assumption. Asserting the premise is what turns a test
+that would have quietly proven nothing into one that fails loudly the day it stops being valid.
 
 ### Known limitations
 

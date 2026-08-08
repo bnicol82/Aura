@@ -348,9 +348,18 @@ struct AssistantOrchestratorTests {
     @Test("The persisted answer comes from the provider's finished response, not from the deltas")
     func persistsFinishedTextRatherThanAccumulatedDeltas() async throws {
         // The two can differ, and when they do the store must match what the provider actually concluded.
-        // The mock splits on single spaces, so a doubled space reassembles from deltas as three spaces
-        // while its finished text keeps two — which makes the distinction observable instead of theoretical.
-        let harness = try Harness(behavior: .respond("one  two"))
+        //
+        // This needs a provider whose deltas genuinely disagree with its final text. An earlier version of
+        // this test tried to get that from `.respond("one  two")`, on the theory that the mock's
+        // space-splitting would reassemble it with an extra space. It does not — splitting and rejoining is
+        // lossless — and the guard assertion below is what caught that, so the test was proving nothing.
+        // Hence an explicit behaviour that diverges by construction.
+        let harness = try Harness(
+            behavior: .streamDivergently(
+                deltas: ["par", "tial answer that ", "was revised"],
+                thenFinish: "The finished answer."
+            )
+        )
 
         var accumulated = ""
         var finished: AssistantResponse?
@@ -365,17 +374,19 @@ struct AssistantOrchestratorTests {
         }
 
         let response = try #require(finished)
-        #expect(response.text == "one  two")
+        #expect(response.text == "The finished answer.")
 
-        // Guards the premise: if the mock ever reassembles exactly, this test silently stops proving
-        // anything, so the difference it relies on is asserted rather than assumed.
-        #expect(accumulated.trimmingCharacters(in: .whitespaces) != response.text)
+        // Guards the premise. If the deltas ever reassemble to the final text, this test stops
+        // distinguishing the two and silently proves nothing — so the divergence it depends on is asserted
+        // rather than assumed. This assertion has already earned its place once by failing.
+        #expect(accumulated == "partial answer that was revised")
+        #expect(accumulated != response.text)
 
         let messages = try await harness.conversationStore.messages(
             inConversationID: response.conversationID
         )
         let assistantMessage = try #require(messages.last { $0.role == .assistant })
-        #expect(assistantMessage.content == "one  two")
+        #expect(assistantMessage.content == "The finished answer.")
     }
 
     @Test("A failing turn's stream ends in failed")
