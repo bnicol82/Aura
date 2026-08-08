@@ -279,7 +279,10 @@ struct ScreenshotHostView: View {
                 }
             }
         case .facts:
-            NavigationStack { ProfileFactListView(category: .personalPreference) }
+            // `.food` deliberately: it holds both a settled fact and the low-confidence one, so the
+            // hedging label from §22 is actually visible in the screenshot. Pointing this at a category
+            // with one confident fact made the screen look right while proving nothing.
+            NavigationStack { ProfileFactListView(category: .food) }
         case .settings:
             SettingsHomeView()
         case .personalitySettings:

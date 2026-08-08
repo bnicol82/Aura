@@ -74,7 +74,12 @@ struct PersonalitySettingsView: View {
                                 .foregroundStyle(.tint)
                         }
                     }
+                    .contentShape(.rect)
                 }
+                // Without this, the default button style tints the whole label, and `.primary` /
+                // `.secondary` are *hierarchical* styles — they resolve against the current foreground
+                // style, which is the tint. The result is a row of blue text that reads as disabled.
+                .buttonStyle(.plain)
             }
         }
     }
@@ -87,7 +92,8 @@ struct PersonalitySettingsView: View {
                 axis: .vertical
             )
             .lineLimit(3...8)
-            .onSubmit(commitCustomDescription)
+            // No `onSubmit` here: Return inserts a newline in a vertical-axis field, so it would never
+            // fire. The button below is the commit path.
 
             Button("Save description", action: commitCustomDescription)
                 .disabled(customDescription.trimmingCharacters(in: .whitespacesAndNewlines)

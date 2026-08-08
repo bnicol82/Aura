@@ -26,7 +26,11 @@ struct AssistantOrbView: View {
         }
         .compositingGroup()
         .animation(.easeInOut(duration: 0.35), value: state)
-        .onAppear {
+        // `task` rather than `onAppear`: the repeating animations below are installed against this
+        // view's geometry, and starting them in `onAppear` races the first layout pass. On the
+        // onboarding welcome screen — the one place nothing forces a second layout — that race left the
+        // ring visibly off-centre from the core. See docs/BUILD_LOG.md.
+        .task {
             guard !reduceMotion else { return }
             isAnimating = true
         }
@@ -50,7 +54,10 @@ struct AssistantOrbView: View {
                     endRadius: 130
                 )
             )
-            .scaleEffect(glowScale)
+            // Anchors are stated explicitly throughout this view. The default is already `.center`, but
+            // an implicit anchor is resolved from the layer's geometry, and every layer here has to
+            // agree on one centre or the orb comes apart.
+            .scaleEffect(glowScale, anchor: .center)
             .animation(breathingAnimation, value: isAnimating)
             .blur(radius: 12)
     }
@@ -69,7 +76,7 @@ struct AssistantOrbView: View {
                 ),
                 lineWidth: ringWidth
             )
-            .rotationEffect(.degrees(isAnimating ? 360 : 0))
+            .rotationEffect(.degrees(isAnimating ? 360 : 0), anchor: .center)
             .animation(rotationAnimation, value: isAnimating)
             .padding(6)
     }
@@ -100,7 +107,7 @@ struct AssistantOrbView: View {
                         .transition(.scale.combined(with: .opacity))
                 }
             }
-            .scaleEffect(coreScale)
+            .scaleEffect(coreScale, anchor: .center)
             .animation(breathingAnimation, value: isAnimating)
             .padding(22)
     }

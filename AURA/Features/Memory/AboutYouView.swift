@@ -126,6 +126,9 @@ struct AboutYouView: View {
                 await environment.update(mutation)
             }
         }
+        // The profile fields commit on blur rather than on Return, so scrolling has to be able to take
+        // focus away — otherwise there is no way to dismiss the keyboard without tapping another field.
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("About you")
         .task {
             guard !hasLoaded else { return }
@@ -191,10 +194,16 @@ struct LabeledTextField: View {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField(placeholder, text: $text)
+            // Vertical axis because these hold free text of unpredictable length — "Mechanical
+            // Engineering at the University of Tennessee" is a realistic value, and a single-line field
+            // truncates it to an ellipsis, hiding information the user typed in a field meant to show it.
+            //
+            // A vertical-axis field treats Return as a newline, so `onSubmit` would never fire and
+            // `submitLabel(.done)` would be a button that does nothing. Both are gone: committing on
+            // blur, below, is the whole commit path.
+            TextField(placeholder, text: $text, axis: .vertical)
+                .lineLimit(1...4)
                 .focused($isFocused)
-                .submitLabel(.done)
-                .onSubmit(onCommit)
         }
         .onChange(of: isFocused) { wasFocused, nowFocused in
             if wasFocused && !nowFocused { onCommit() }

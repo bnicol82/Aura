@@ -74,6 +74,46 @@ hardware with Apple Intelligence enabled. The first genuine conversation is stil
 
 ---
 
+## What looking at the screens found
+
+CI run 7 produced the first images of AURA (`docs/SCREENSHOTS.md`). Worth recording plainly: the app had
+been **green for two runs — 0 errors, 0 warnings, 210 tests passing — while shipping four visible
+defects.** None of them was the kind of thing a test suite catches, and all four were obvious within
+seconds of looking at a picture.
+
+| What | Where | Cause |
+|---|---|---|
+| Selection rows rendered blue and read as disabled | AI Model, Personality, Assistant settings | `.primary` / `.secondary` are *hierarchical* styles. Inside a default-styled `Button`, they resolve against the button's **tint**, not the label colour. Onboarding got this right with `.buttonStyle(.plain)`; the settings screens never did. |
+| Long field values truncated to an ellipsis | `LabeledTextField` — "Studies", "Work" | Single-line `TextField`. "Mechanical Engineering at the University of Tennessee" is a realistic value and was unreadable in the field meant to display it. |
+| Two `onSubmit` handlers that could never fire | `PersonalitySettingsView`, and one introduced then removed here | A vertical-axis `TextField` treats Return as a newline, so `onSubmit` never fires and `submitLabel(.done)` labels a no-op. |
+| Orb ring visibly off-centre from its core | Onboarding welcome screen only | Unconfirmed — see below. |
+
+The button on the "I'm Nova." screen also said **"Start talking"** on a screen that states voice is not
+wired up yet. Now "Start chatting", which is what actually works.
+
+### The orb, and what is not yet known
+
+On the welcome screen the ring and the core were offset by roughly a third of the orb's width. Every
+other screen showing the same view — ready, home, home in dark mode — rendered it correctly concentric.
+
+The layers cannot be off-centre by construction: three `Circle()`s in a `ZStack` with symmetric padding,
+and neither `rotationEffect` nor `scaleEffect` can translate a centred circle. The distinguishing feature
+of the welcome screen is that it is the only one where nothing forces a **second layout pass** — the
+other onboarding screenshots reach their step by mutating state, which relays out the content.
+
+The working theory is therefore a race: the `repeatForever` animations were installed in `onAppear`,
+against geometry that was not yet final. The fix moves them to `.task` and states every transform anchor
+explicitly. **This is a hypothesis, not a diagnosis** — it was reasoned from the image and the source,
+not reproduced, because there is no Mac here to run a simulator against. The test is the next CI capture.
+If the offset survives, the theory was wrong.
+
+### The lesson worth keeping
+
+A green build says the code is *valid*. It says nothing about whether it is *right*. Four defects lived
+comfortably behind 210 passing tests, and the screenshot pipeline earned its cost on its first run.
+
+---
+
 ## Phase 2 — Basic Intelligence
 
 **Status: complete, compiled and tested.** Verified by CI run 5 — see [Verification](#verification).

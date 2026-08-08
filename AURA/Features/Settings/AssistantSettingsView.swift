@@ -40,7 +40,10 @@ struct AssistantSettingsView: View {
                                     .foregroundStyle(.tint)
                             }
                         }
+                        .contentShape(.rect)
                     }
+                    // See the note in PersonalitySettingsView.
+                    .buttonStyle(.plain)
                 }
             }
 

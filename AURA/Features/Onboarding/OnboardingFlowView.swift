@@ -131,7 +131,9 @@ struct OnboardingFlowView: View {
     private var primaryButtonTitle: String {
         switch step {
         case .welcome: return "Get started"
-        case .ready: return "Start talking"
+        // Not "Start talking": the same screen says voice is not wired up yet, and typing is what
+        // actually works today. A button promising the one unbuilt feature is the pretence §75 forbids.
+        case .ready: return "Start chatting"
         case .memory: return memoryEnabled ? "Enable memory" : "Not now"
         default: return "Continue"
         }

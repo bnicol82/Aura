@@ -37,7 +37,11 @@ struct AIModelSettingsView: View {
                                     .foregroundStyle(.tint)
                             }
                         }
+                        .contentShape(.rect)
                     }
+                    // See the note in PersonalitySettingsView: the default button style tints the label,
+                    // and hierarchical `.primary` / `.secondary` then resolve against that tint.
+                    .buttonStyle(.plain)
                 }
             } header: {
                 Text("Where I think")

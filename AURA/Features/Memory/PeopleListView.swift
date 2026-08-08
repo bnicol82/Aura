@@ -234,6 +234,8 @@ struct PersonDetailView: View {
                 )
             }
         }
+        // As in AboutYouView: these fields commit on blur, so scrolling must be able to remove focus.
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle(person?.displayName ?? "Person")
         .task {
             guard !hasLoaded else { return }
