@@ -146,6 +146,12 @@ final class ConversationController {
                 accumulated += delta
                 streamingText = accumulated
 
+            case .textReplaced(let whole):
+                // The provider revised rather than continued, so what is on screen is wrong and gets
+                // replaced outright instead of appended to.
+                accumulated = whole
+                streamingText = accumulated
+
             case .toolStarted(let note):
                 state = .toolExecution(label: note.label)
 

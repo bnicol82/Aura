@@ -183,7 +183,15 @@ actor AssistantOrchestrator: AssistantOrchestrating {
             )
 
             try Task.checkCancellation()
-            let modelResponse = try await provider.send(modelRequest, toolInvoker: nil)
+
+            // Streamed rather than awaited whole, so the reply appears as it is generated. A provider
+            // with no native streaming inherits a default that emits one delta, so this path is correct
+            // for every provider — the orchestrator does not branch on whether streaming is real.
+            let modelResponse = try await generate(
+                modelRequest,
+                using: provider,
+                emit: emit
+            )
 
             let answer = modelResponse.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !answer.isEmpty else {
@@ -235,6 +243,45 @@ actor AssistantOrchestrator: AssistantOrchestrating {
     }
 
     // MARK: - Steps
+
+    /// Runs one generation, forwarding incremental text to the caller and returning the finished response.
+    ///
+    /// The provider's terminal `.finished` event is the authority on the final text, not the accumulated
+    /// deltas. Those two agreeing is the normal case, but if they ever disagree the persisted message must
+    /// match what the provider actually concluded rather than what the UI happened to assemble. A stream
+    /// that ends without `.finished` is a provider bug, and it is reported rather than papered over with
+    /// whatever text arrived.
+    private func generate(
+        _ modelRequest: ModelRequest,
+        using provider: any LanguageModelProvider,
+        emit: @Sendable (AssistantTurnEvent) -> Void
+    ) async throws -> ModelResponse {
+        var finished: ModelResponse?
+
+        for try await event in provider.stream(modelRequest, toolInvoker: nil) {
+            try Task.checkCancellation()
+
+            switch event {
+            case .textDelta(let delta):
+                emit(.textDelta(delta))
+            case .textReplaced(let whole):
+                emit(.textReplaced(whole))
+            case .toolActivity(let note):
+                emit(.toolFinished(note))
+            case .toolCallRequested:
+                // Only `orchestratorManaged` providers request calls, and no tools are offered yet, so
+                // reaching here means a provider changed behaviour. Phase 10 gives this a real branch.
+                AuraLog.orchestrator.notice("A provider requested a tool call before tool support exists; ignoring it.")
+            case .finished(let response):
+                finished = response
+            }
+        }
+
+        guard let finished else {
+            throw AuraError.emptyModelResponse
+        }
+        return finished
+    }
 
     private func resolveConversation(for request: AssistantRequest) async throws -> UUID {
         if let existing = request.conversationID,

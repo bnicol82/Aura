@@ -219,6 +219,12 @@ struct ModelResponse: Sendable, Equatable {
 /// the UI never has to know which kind it is talking to.
 enum ModelStreamEvent: Sendable {
     case textDelta(String)
+    /// The reply so far, replacing everything streamed before it.
+    ///
+    /// Emitted when a provider's cumulative output stops being an extension of what it already sent — a
+    /// revision rather than a continuation. A delta cannot be taken back, so a provider that revises has
+    /// to be able to say "discard that, here is the whole thing".
+    case textReplaced(String)
     /// A tool call the orchestrator must run.
     case toolCallRequested(ModelToolCall)
     /// Progress on tool work the provider is doing itself. Actions only, never reasoning (§36).

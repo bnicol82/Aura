@@ -128,6 +128,94 @@ reports on the work needs the same scepticism as the work.
 
 ---
 
+## Phase 3 — Streaming and transcript history
+
+**Status: written, not yet verified.** This entry is being written before CI has compiled it; the
+verification line gets filled in from the run, not from optimism.
+
+Two of Phase 3's five items. The remaining three — `prewarm()`, a rolling conversation summary, and
+splitting `PersonalizationContext` into stable instructions plus per-turn context — are next.
+
+### Real token streaming
+
+`AppleFoundationModelProvider` no longer inherits the protocol's one-delta default. It uses
+`streamResponse(to:options:)` and diffs Apple's **cumulative** snapshots into the deltas
+`ModelStreamEvent` promises.
+
+The consumer side needed nothing: `ConversationController` already accumulated deltas into
+`streamingText` and `ConversationView` already rendered them as a live bubble. What changed is that the
+orchestrator now generates through `provider.stream` instead of `provider.send`, so those events finally
+carry real incremental text. A provider with no native streaming still inherits the default that emits
+one delta, so the orchestrator has one path rather than a branch on whether streaming is genuine.
+
+Two decisions worth recording:
+
+**`ModelStreamEvent` gained `textReplaced`.** Snapshot streams are only append-only by convention, not by
+documented guarantee. A delta cannot be retracted, so a provider whose output stops extending what it
+already sent needs a way to say "discard that, here is the whole reply". Without it, a revision would
+concatenate into nonsense on screen.
+
+**`.finished` is the authority on the final text, not the accumulated deltas.** They agree in the normal
+case, but if they ever disagree the persisted message must match what the provider concluded rather than
+what the UI happened to assemble. A stream that ends without `.finished` throws instead of persisting
+whatever text arrived. There is a test for this that only works because the mock provider's delta
+reassembly differs from its finished text on repeated spaces — and it asserts that difference, so it
+cannot quietly stop proving anything.
+
+### History as a Transcript, not as prose about history
+
+Prior turns used to be rendered into the prompt as a labelled block — `Earlier in this conversation:
+User: … You: …`. They are now replayed as a real `Transcript` via
+`LanguageModelSession(model:tools:transcript:)`, so the model sees actual role separation, and the prompt
+contains only the turn being taken.
+
+The store is still the single source of truth. The transcript is *derived from it* on every request
+rather than accumulated alongside it — which is what the Phase 2 note about "two sources of truth" was
+protecting, and it survives this change intact.
+
+Instructions ride in the transcript because `init(model:tools:transcript:)` takes no `instructions`
+parameter. That is the only way in, and it was verified rather than assumed.
+
+### Every Apple API verified before use
+
+Per the standing rule, each signature was checked against Apple's documentation rather than recalled. The
+table is in the header of `AppleFoundationModelProvider.swift` so it sits next to the code that depends
+on it: `streamResponse(to:options:)` returning `sending ResponseStream<String>`, `ResponseStream`'s
+`Element` being `Snapshot<Content>`, `Snapshot.content` being `Content.PartiallyGenerated`, and the
+initialisers for `Transcript`, `Transcript.Instructions`, `Transcript.Prompt`, `Transcript.Response` and
+`Transcript.TextSegment`.
+
+**One thing could not be verified, and is flagged rather than hidden.** `Generable` declares
+`associatedtype PartiallyGenerated: ConvertibleFromGeneratedContent = Self`, and Apple does not publicly
+document `String`'s conformance — so whether `Snapshot.content` is a `String` is unconfirmed. The code
+annotates it `String` explicitly for exactly that reason: if the resolution is wrong, the compiler fails
+and names the real type. That is a deliberate choice of a loud failure over `String(describing:)`, which
+would compile against anything and ship mangled text.
+
+### Tests added
+
+`resolveDelta` is pure and unit-tested, because a diffing bug duplicates or drops text on screen and no
+compiler catches it. Beyond the three obvious cases there is a property test that feeds every prefix of a
+sentence through as one snapshot per character and asserts the reassembly is byte-identical to the
+original. `makeTranscript` is tested for entry shape, for excluding the live turn, and for omitting a
+blank instructions entry.
+
+### Known limitations
+
+- Streaming has never run against the real model. A simulator has no Apple Intelligence, so CI can only
+  prove the code compiles and that the mock path behaves; the deltas a real device produces are unseen.
+- Tool results replay as labelled prompts rather than `Transcript.ToolOutput`, because constructing one
+  honestly needs the tool-call entry it answers and tools are Phase 10.
+- Token usage is still `nil` on this provider — `LanguageModelSession.Usage` is iOS 27.
+
+### Next implementation step
+
+The three remaining Phase 3 items: `prewarm()` on conversation open, a rolling summary so threads longer
+than the working-memory window stay coherent, and the stable/per-turn context split that makes a warm
+session worth keeping.
+
+---
+
 ## Phase 2 — Basic Intelligence
 
 **Status: complete, compiled and tested.** Verified by CI run 5 — see [Verification](#verification).

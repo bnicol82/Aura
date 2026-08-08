@@ -119,6 +119,8 @@ enum AssistantTurnEvent: Sendable {
     case routed(ModelRoute)
     /// Incremental reply text.
     case textDelta(String)
+    /// The reply so far, replacing everything streamed before it. See `ModelStreamEvent.textReplaced`.
+    case textReplaced(String)
     /// A tool started: "Checking your calendar…".
     case toolStarted(ToolActivityNote)
     case toolFinished(ToolActivityNote)

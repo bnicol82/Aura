@@ -327,6 +327,7 @@ struct AssistantOrchestratorTests {
             case .contextAssembled: labels.append("context")
             case .routed: labels.append("routed")
             case .textDelta: labels.append("delta")
+            case .textReplaced: labels.append("replaced")
             case .toolStarted, .toolFinished, .awaitingConfirmation: labels.append("tool")
             case .memorySaved, .memoryCandidatePending: labels.append("memory")
             case .finished: labels.append("finished")
@@ -339,6 +340,42 @@ struct AssistantOrchestratorTests {
         #expect(labels.contains("context"))
         #expect(labels.contains("routed"))
         #expect(!labels.contains("failed"))
+        // Streaming is the generation path now, so a turn must produce incremental text rather than one
+        // silent wait followed by a finished answer.
+        #expect(labels.contains("delta"))
+    }
+
+    @Test("The persisted answer comes from the provider's finished response, not from the deltas")
+    func persistsFinishedTextRatherThanAccumulatedDeltas() async throws {
+        // The two can differ, and when they do the store must match what the provider actually concluded.
+        // The mock splits on single spaces, so a doubled space reassembles from deltas as three spaces
+        // while its finished text keeps two — which makes the distinction observable instead of theoretical.
+        let harness = try Harness(behavior: .respond("one  two"))
+
+        var accumulated = ""
+        var finished: AssistantResponse?
+
+        for await event in harness.orchestrator.stream(AssistantRequest(text: "Say it.")) {
+            switch event {
+            case .textDelta(let delta): accumulated += delta
+            case .textReplaced(let whole): accumulated = whole
+            case .finished(let response): finished = response
+            default: break
+            }
+        }
+
+        let response = try #require(finished)
+        #expect(response.text == "one  two")
+
+        // Guards the premise: if the mock ever reassembles exactly, this test silently stops proving
+        // anything, so the difference it relies on is asserted rather than assumed.
+        #expect(accumulated.trimmingCharacters(in: .whitespaces) != response.text)
+
+        let messages = try await harness.conversationStore.messages(
+            inConversationID: response.conversationID
+        )
+        let assistantMessage = try #require(messages.last { $0.role == .assistant })
+        #expect(assistantMessage.content == "one  two")
     }
 
     @Test("A failing turn's stream ends in failed")
