@@ -270,7 +270,7 @@ struct PersonalizationContextTests {
             createdAt: .now,
             updatedAt: .now
         )
-        let assembled = context(userName: "Alex", facts: [fact])
+        let assembled = context(facts: [fact], userName: "Alex")
 
         // Identity belongs to the stable half: it is the same on every turn.
         #expect(assembled.stableInstructions.contains("Alex"))
@@ -295,7 +295,7 @@ struct PersonalizationContextTests {
             createdAt: .now,
             updatedAt: .now
         )
-        let turn = context(userName: "Alex", facts: [fact]).turnContext()
+        let turn = context(facts: [fact], userName: "Alex").turnContext()
 
         #expect(turn.contains("Christopher Bell"))
         #expect(turn.contains("The current date and time is"))
