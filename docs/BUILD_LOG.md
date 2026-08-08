@@ -5,9 +5,78 @@ limitations, compile risks, next step.
 
 ---
 
+## Verification
+
+**Commit `92c54c6` builds clean and passes 210 tests.** Confirmed on GitHub's macOS runners:
+macOS 26.5.2, **Xcode 26.6**, Swift 6.3.3, iPhone 17 Pro simulator.
+
+```
+Build:  0 errors, 0 warnings
+Tests:  210 tests in 26 suites — all passing (5m 35s)
+```
+
+Roughly 15,000 lines of Swift, written across two phases without a compiler, needed **four genuine
+code fixes and two configuration fixes** to go green.
+
+| Run | Build | Tests | What it found |
+|---|---|---|---|
+| 1 | 3 errors, 2 warnings | — | `Section(_:content:footer:)` does not exist; a dead binding; a discarded return value |
+| 2 | 1 error | — | escaping closure capturing a non-escaping parameter |
+| 3 | **clean** | not configured | empty `<TestPlans>` in the scheme disabled the test action |
+| 4 | clean | 209 / 210 | a test asserting Phase 1's reality against Phase 2's code |
+| 5 | **clean** | **210 / 210** | — |
+
+### The defects, and what each one says
+
+1. **`Section(fact.key) { … } footer: { … }` has no such initializer.** SwiftUI's title-string
+   `Section` inits take only content; the header/footer forms take no title string. The only genuine
+   API misunderstanding in the whole codebase.
+2. **Escaping-closure capture** in `PersonDetailView.commit`. Fixed by building the mutation before the
+   `Task` rather than marking the parameter `@escaping`, so only a `Sendable` value crosses in.
+3. **A dead `let name` binding** in `PersonalityEngine.stylePreview`.
+4. **A discarded `removeValue` result** in `InMemoryCredentialStore.delete` — made explicit rather than
+   silenced, since holding a copy of a secret we were asked to delete defeats the point.
+5. **The scheme's empty `<TestPlans>` element.** Declaring it at all makes Xcode ignore `<Testables>`
+   entirely. A hand-authored-project-file problem, not a code problem.
+6. **A stale test.** `FeatureStageTests` kept its own list of which capabilities were pending, and
+   Phase 2 flipped two flags to `.live` without updating it. Fixed by deriving the tests from
+   `FeatureFlags.all`, so the same drift cannot recur — the fix removed the hazard, not just the
+   symptom.
+
+### Which Phase 1 predictions held
+
+The eight compile risks listed under Phase 1 were ranked guesses. Outcome:
+
+| Predicted risk | Real? |
+|---|---|
+| Hand-written `AURA.xcodeproj` rejected by Xcode | **No** — read fine; XcodeGen fallback never triggered |
+| `@ModelActor` conformance to async protocols | No |
+| `ReferenceWritableKeyPath` into `@Model` properties | No |
+| `Tab(value:content:label:)` signature | No |
+| `#Predicate` with a captured `Array.contains` | No |
+| `Date.ISO8601FormatStyle` date-only parsing | No |
+| Strict-concurrency diagnostics in views | **Partly** — one escaping-closure capture |
+| `GenerationError` deprecation warnings | Not yet — no warnings on Xcode 26.6 |
+
+Every Foundation Models API checked against Apple's documentation before use compiled as expected:
+`Prompt { }` and `Instructions { }` builders, `response.content`, the availability enums,
+`GenerationOptions(temperature:maximumResponseTokens:)`. The doc-verification pass paid for itself; the
+one API mistake was in a SwiftUI initializer that was *not* verified that way.
+
+### What green does and does not mean
+
+It means the schema is valid (all 15 models, cascade deletes, every `#Predicate` shape retrieval
+depends on), a full orchestrated turn runs end to end against a mock provider, context selectivity
+holds, and the safety tiers behave.
+
+It does **not** mean AURA has been used. No test can run Apple's on-device model — that needs real
+hardware with Apple Intelligence enabled. The first genuine conversation is still ahead.
+
+---
+
 ## Phase 2 — Basic Intelligence
 
-**Status: complete, not yet compiled.**
+**Status: complete, compiled and tested.** Verified by CI run 5 — see [Verification](#verification).
 
 AURA holds a real conversation as of this stage. Typed input goes to Apple's on-device model through the
 orchestrator, the answer is persisted, and the transcript renders from the store.
@@ -154,11 +223,12 @@ New in this phase, most likely first:
 
 ## Phase 1 — Foundation
 
-**Status: complete, not yet compiled.**
+**Status: complete, compiled and tested.** Verified by CI run 5 — see [Verification](#verification).
 
-Authored in a Linux container with no Swift toolchain, so nothing here has been through a compiler.
-The first `⌘B` in Xcode is part of this phase's acceptance, and the compile risks below are where to
-look if it fails.
+Authored in a Linux container with no Swift toolchain, so none of it had been through a compiler when
+it was written. The "compile risks" listed below were predictions made at that time; the Verification
+section records which of them were real. Keeping both is the point — a prediction is only worth
+anything next to its outcome.
 
 ### Files created
 

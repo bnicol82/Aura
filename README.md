@@ -8,12 +8,16 @@ AURA is a native SwiftUI application built around six pillars: **Intelligence, P
 Memory, Action, Privacy, Continuity**. It is not a chat client — it is a personal AI layer that
 remembers what matters to you, speaks in a voice you choose, and can actually do things.
 
-> **Status: Phase 2 (Basic Intelligence) complete.** AURA holds a real typed conversation: input goes
-> to Apple's on-device model through the orchestrator, the answer persists, and the transcript renders
-> from the store. See [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md) for what works today, what is
-> deliberately deferred, and what comes next. Nothing in this repository has been compiled yet — it was
-> authored in a Linux container with no Swift toolchain. Treat the first `⌘B` in Xcode as part of
-> acceptance, and see the build log's ranked compile risks if it fails.
+> **Status: Phase 2 (Basic Intelligence) complete, compiled and tested.** AURA holds a real typed
+> conversation: input goes to Apple's on-device model through the orchestrator, the answer persists, and
+> the transcript renders from the store.
+>
+> Verified on Xcode 26.6 / Swift 6.3.3: **0 errors, 0 warnings, 210 tests passing across 26 suites.**
+> See [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md) for the verification record — including which of the
+> predicted compile risks turned out to be real — and for what is deliberately deferred.
+>
+> One caveat worth stating: no test can exercise Apple's on-device model, which needs real hardware with
+> Apple Intelligence enabled. AURA compiles and its logic is tested; it has not yet held a conversation.
 
 ## Requirements
 
