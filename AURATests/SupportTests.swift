@@ -252,16 +252,31 @@ struct FeatureStageTests {
         #expect(phases == phases.sorted())
     }
 
-    @Test("Phase 2 delivered a working conversation, and voice is still to come")
-    func currentStateMatchesPhase2() {
-        // A deliberate check on the honesty invariant at this specific point in the build: typing works,
-        // talking does not, and the flags say exactly that.
+    @Test("Typing always works, and every flag can explain itself")
+    func flagsStayHonestWhicheverPhaseThisIs() {
+        // This replaced a test that hardcoded "voice is not live yet". That assertion was true when it was
+        // written and became false on the commit that shipped voice — so the test failed *because the project
+        // made progress*, which is noise rather than signal. Second time this suite has had that shape; the
+        // fix both times is to assert the invariant instead of the snapshot.
+
+        // The floor: whatever else is unfinished, AURA must be usable by typing. If this ever goes pending,
+        // the app has no working input at all.
         #expect(FeatureFlags.textConversation.isLive)
-        #expect(FeatureFlags.conversationHistory.isLive)
-        #expect(!FeatureFlags.voiceInput.isLive)
-        #expect(!FeatureFlags.tools.isLive)
+
+        // The honesty invariant that actually matters (§78), and it holds in every phase: a pending
+        // capability can always explain itself to the user, and a live one never claims to be unfinished.
+        for flag in FeatureFlags.all {
+            if flag.stage.isLive {
+                #expect(flag.stage.userFacingNote == nil, "\(flag.name) is live but still carries a note")
+                #expect(flag.stage.badgeText == nil, "\(flag.name) is live but still shows a badge")
+            } else {
+                #expect(flag.stage.userFacingNote != nil, "\(flag.name) is pending with nothing to tell the user")
+                #expect(flag.stage.badgeText != nil, "\(flag.name) is pending with no badge")
+            }
+        }
+
+        // Something has to be shipped, or the flag table is describing a different app.
         #expect(!FeatureFlags.live.isEmpty)
-        #expect(!FeatureFlags.pending.isEmpty)
     }
 }
 
