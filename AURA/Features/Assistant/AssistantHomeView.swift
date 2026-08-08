@@ -84,7 +84,13 @@ struct AssistantHomeView: View {
                 title: "Talk",
                 symbolName: "mic.fill",
                 stage: FeatureFlags.voiceInput
-            ) {}
+            ) {
+                // Opens the conversation *and* starts listening: tapping "Talk" and then having to find a
+                // microphone button would make the tile a label rather than an action. Safe to start before
+                // the screen appears, because the controller lives on the environment, not on the view.
+                navigationPath.append(AssistantRoute.conversation)
+                Task { await environment.conversation.startListening() }
+            }
 
             QuickActionButton(
                 title: "Type",

@@ -45,6 +45,8 @@ final class AppEnvironment {
 
     let credentialStore: any SecureCredentialStoring
     let permissionManager: any PermissionManaging
+    /// Exposed so Settings can list the voices actually installed on this device.
+    let speechSynthesis: any SpeechSynthesisService
     let toolRegistry: ToolRegistry
 
     // MARK: Observable state
@@ -123,13 +125,25 @@ final class AppEnvironment {
         )
         self.orchestrator = orchestrator
 
+        // Real by default now that Phase 5 needs microphone and speech authorization. Previews and
+        // screenshots still pass a stub explicitly, so nothing headless triggers a system prompt.
+        let permissions = permissionManager ?? SystemPermissionManager()
+        self.permissionManager = permissions
+
+        let speechRecognition = SystemSpeechRecognitionService(permissions: permissions)
+        let speechSynthesis = SystemSpeechSynthesisService()
+        self.speechSynthesis = speechSynthesis
+
         self.conversation = ConversationController(
             orchestrator: orchestrator,
-            conversationStore: conversationStore
+            conversationStore: conversationStore,
+            recognition: speechRecognition,
+            synthesis: speechSynthesis,
+            permissions: permissions,
+            assistantProfileStore: assistantProfileStore
         )
 
         self.credentialStore = credentialStore ?? KeychainCredentialStore()
-        self.permissionManager = permissionManager ?? StubPermissionManager()
         self.toolRegistry = toolRegistry
         self.defaults = defaults
         self.hasCompletedOnboarding = defaults.bool(forKey: Self.onboardingCompletedKey)

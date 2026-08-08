@@ -53,19 +53,11 @@ enum FeatureFlags {
     /// question answered by `ModelAvailability`, not a build-stage one.
     static let textConversation = FeatureStage.live
 
-    /// Voice input.
-    static let voiceInput = FeatureStage.pending(
-        phase: 5,
-        phaseName: "Voice",
-        note: "Talking to me isn't wired up yet. Voice comes after the conversation layer."
-    )
+    /// Voice input. Live as of Phase 5.
+    static let voiceInput = FeatureStage.live
 
-    /// Spoken replies.
-    static let voiceOutput = FeatureStage.pending(
-        phase: 5,
-        phaseName: "Voice",
-        note: "I can't speak out loud yet."
-    )
+    /// Spoken replies. Live as of Phase 5.
+    static let voiceOutput = FeatureStage.live
 
     /// Saved conversation history.
     ///

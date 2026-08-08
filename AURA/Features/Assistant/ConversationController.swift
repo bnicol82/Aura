@@ -42,12 +42,33 @@ final class ConversationController {
     /// Which model answered last, so the transcript can be honest about on-device versus cloud.
     private(set) var lastRoute: ModelRoute?
 
+    private let recognition: (any SpeechRecognitionService)?
+    private let synthesis: (any SpeechSynthesisService)?
+    private let permissions: (any PermissionManaging)?
+    private let assistantProfileStore: (any AssistantProfileStoring)?
+
+    /// The live listening session, so stopping is possible from the UI.
+    private var listeningTask: Task<Void, Never>?
+
+    /// Why listening is unavailable, when it is. Shown instead of silently doing nothing on a tap.
+    ///
+    /// Settable so the alert that presents it can dismiss it.
+    var voiceUnavailableMessage: String?
+
     init(
         orchestrator: any AssistantOrchestrating,
-        conversationStore: any ConversationStoring
+        conversationStore: any ConversationStoring,
+        recognition: (any SpeechRecognitionService)? = nil,
+        synthesis: (any SpeechSynthesisService)? = nil,
+        permissions: (any PermissionManaging)? = nil,
+        assistantProfileStore: (any AssistantProfileStoring)? = nil
     ) {
         self.orchestrator = orchestrator
         self.conversationStore = conversationStore
+        self.recognition = recognition
+        self.synthesis = synthesis
+        self.permissions = permissions
+        self.assistantProfileStore = assistantProfileStore
     }
 
     // MARK: - Derived
@@ -56,6 +77,159 @@ final class ConversationController {
 
     var canSend: Bool {
         !draft.isBlank && !isBusy && FeatureFlags.textConversation.isLive
+    }
+
+    /// Whether the microphone button does anything.
+    ///
+    /// Requires the flag *and* an injected service: a build wired without one must disable the button
+    /// rather than present a control that silently fails.
+    var canListen: Bool {
+        FeatureFlags.voiceInput.isLive && recognition != nil && !isBusy
+    }
+
+    var isListening: Bool { state.isListening }
+
+    // MARK: - Voice
+
+    /// Starts or stops listening, matching what the one microphone button means in each state.
+    func toggleListening() async {
+        if state.isListening {
+            await stopListening()
+        } else {
+            await startListening()
+        }
+    }
+
+    /// Opens the microphone and streams the transcript into `state`.
+    ///
+    /// Permission is requested here rather than at launch (§53): the microphone prompt makes sense the
+    /// moment someone taps a microphone, and makes none on first run before they know what AURA is.
+    func startListening() async {
+        guard let recognition, canListen else { return }
+
+        voiceUnavailableMessage = nil
+
+        if let permissions {
+            for permission in [AuraPermission.microphone, .speechRecognition] {
+                let status = await permissions.request(permission)
+                guard status.isUsable else {
+                    // Naming which one is missing is the difference between a fixable problem and a dead
+                    // button. A denied permission cannot be re-prompted, so the message points at Settings.
+                    voiceUnavailableMessage = status == .notDetermined
+                        ? "\(permission.displayName) access is needed before I can listen."
+                        : "\(permission.displayName) access is off. You can turn it back on in Settings."
+                    return
+                }
+            }
+        }
+
+        let availability = await recognition.availability()
+        guard availability.isAvailable || availability == .assetsDownloading else {
+            voiceUnavailableMessage = availability.userFacingDescription
+            return
+        }
+
+        state = .listening(transcript: "")
+
+        listeningTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let locale = Locale.current
+                // Assets may need downloading on first use, which is a visible wait rather than a failure.
+                try await recognition.prepare(locale: locale)
+
+                var finalTranscript = ""
+                for try await update in try recognition.startListening(locale: locale) {
+                    // A cumulative transcript, not a delta — assigning is correct, appending would stutter.
+                    finalTranscript = update.text
+                    if self.state.isListening {
+                        self.state = .listening(transcript: update.text)
+                    }
+                }
+                await self.finishListening(with: finalTranscript)
+            } catch {
+                await self.failListening(with: error.asAuraError)
+            }
+        }
+    }
+
+    /// Stops the microphone and lets the recogniser finalise, so the last words still count.
+    func stopListening() async {
+        guard let recognition, state.isListening else { return }
+        await recognition.stopListening()
+        // Deliberately not cancelling `listeningTask`: the stream is still going to deliver a final update,
+        // and cancelling here would throw away the sentence the user just finished saying.
+    }
+
+    /// Abandons listening and keeps nothing.
+    func cancelListening() async {
+        listeningTask?.cancel()
+        listeningTask = nil
+        await recognition?.cancel()
+        if state.isListening { state = .idle }
+    }
+
+    private func finishListening(with transcript: String) async {
+        listeningTask = nil
+        let spoken = transcript.normalizedWhitespace
+
+        guard !spoken.isEmpty else {
+            // Nothing heard. Returning to idle silently is right — a "I didn't catch that" error for an
+            // accidental tap would be noise.
+            if state.isListening { state = .idle }
+            return
+        }
+
+        state = .idle
+        await run(
+            AssistantRequest(text: spoken, source: .voiceInput, conversationID: conversationID)
+        )
+    }
+
+    private func failListening(with error: AuraError) async {
+        listeningTask = nil
+        if state.isListening { state = .idle }
+        guard !error.isSilent else { return }
+        voiceUnavailableMessage = [error.errorDescription, error.recoverySuggestion]
+            .compactMap { $0 }
+            .joined(separator: " ")
+    }
+
+    /// Reads a reply aloud, if the user asked for that.
+    ///
+    /// `shouldSpeak` on the response already accounts for the preference and the request source, so this
+    /// does not second-guess it. Cancellation is expected rather than exceptional: the user interrupting is
+    /// the normal way speech ends.
+    private func speak(_ response: AssistantResponse) async {
+        guard FeatureFlags.voiceOutput.isLive,
+              let synthesis,
+              response.shouldSpeak,
+              !response.isFailure else { return }
+
+        let preferences = await voicePreferences()
+        state = .speaking
+        do {
+            try await synthesis.speak(
+                response.text,
+                voiceIdentifier: preferences?.voiceIdentifier,
+                rate: preferences?.speechRate ?? 0.5
+            )
+        } catch {
+            // Interrupted, or the engine failed. Either way the reply is already on screen, so there is
+            // nothing worth telling the user about.
+        }
+        if state.isSpeaking { state = .idle }
+    }
+
+    /// Stops speech immediately. Bound to a tap on the orb while it is talking.
+    func stopSpeaking() async {
+        await synthesis?.stop()
+        if state.isSpeaking { state = .idle }
+    }
+
+    private func voicePreferences() async -> VoicePreferences? {
+        guard let assistantProfileStore else { return nil }
+        return try? await assistantProfileStore.currentProfile().voice
     }
 
     /// Status line under the composer, or `nil` when there is nothing to say.
@@ -170,11 +344,14 @@ final class ConversationController {
                 // Surfaced in Phase 7, when there is something to surface.
                 break
 
-            case .finished:
+            case .finished(let response):
                 // The store write is what the transcript renders, so the partial is dropped rather than
                 // shown alongside the saved message.
                 streamingText = nil
                 state = .idle
+                // Speaking happens after the reply is on screen, never instead of it. A spoken answer that
+                // the user cannot also read would be lost the moment they missed a word.
+                await speak(response)
 
             case .failed(let error):
                 streamingText = nil

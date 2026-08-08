@@ -10,8 +10,8 @@ import SwiftUI
 struct VoiceSettingsView: View {
     @Environment(AppEnvironment.self) private var environment
 
-    /// Filled in Phase 5 by `SpeechSynthesisService.availableVoices()`.
     @State private var voices: [AssistantVoice] = []
+    @State private var hasLoadedVoices = false
 
     var body: some View {
         Form {
@@ -23,8 +23,13 @@ struct VoiceSettingsView: View {
 
             Section {
                 if voices.isEmpty {
-                    PendingFeatureNotice(stage: FeatureFlags.voiceOutput, symbolName: "speaker.wave.2")
-                        .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                    // Distinguishes "still loading" from "this device has none", because the two call for
+                    // completely different reactions from the user.
+                    Text(hasLoadedVoices
+                        ? "No speech voices are installed for your language. You can add one in iOS Settings → Accessibility → Spoken Content."
+                        : "Looking for installed voices…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 } else {
                     Picker("Voice", selection: voiceBinding) {
                         Text("System default").tag(String?.none)
@@ -57,6 +62,13 @@ struct VoiceSettingsView: View {
             }
         }
         .navigationTitle("Voice")
+        .task {
+            guard !hasLoadedVoices else { return }
+            // Only voices already on the device: picking one that is not installed silently falls back to
+            // the default, which reads as the setting being ignored.
+            voices = await environment.speechSynthesis.availableVoices()
+            hasLoadedVoices = true
+        }
     }
 
     private var rateLabel: String {

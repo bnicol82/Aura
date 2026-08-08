@@ -36,6 +36,12 @@ struct ConversationView: View {
             get: { controller.errorMessage },
             set: { controller.errorMessage = $0 }
         ))
+        // Separate from the turn error: a microphone that cannot open is a different problem from an answer
+        // that failed, and saying so beats a button that appears to do nothing.
+        .errorAlert(title: "I can't listen", message: Binding(
+            get: { controller.voiceUnavailableMessage },
+            set: { controller.voiceUnavailableMessage = $0 }
+        ))
     }
 
     private var controller: ConversationController { environment.conversation }
@@ -93,6 +99,25 @@ struct ConversationView: View {
                 .accessibilityElement(children: .combine)
             }
 
+            if controller.isListening {
+                // The live transcript sits above the composer rather than inside it: it is not a draft the
+                // user can edit, and putting it in the field would invite them to try.
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform")
+                        .foregroundStyle(.red)
+                        .symbolEffect(.variableColor.iterative, isActive: true)
+                    Text(controller.state.statusText)
+                        .font(.callout)
+                        .foregroundStyle(controller.state.liveTranscript?.isEmpty == false ? .primary : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .transition(.opacity)
+                .accessibilityElement(children: .combine)
+            }
+
             HStack(alignment: .bottom, spacing: 10) {
                 TextField(
                     "Message \(environment.assistantName)",
@@ -119,13 +144,17 @@ struct ConversationView: View {
                 .accessibilityLabel("Send")
 
                 Button {
-                    // Voice input arrives in Phase 5.
+                    Task { await controller.toggleListening() }
                 } label: {
-                    Image(systemName: "mic.circle.fill")
+                    Image(systemName: controller.isListening ? "stop.circle.fill" : "mic.circle.fill")
                         .font(.system(size: 30))
+                        // Red while live, because "is the microphone open" is the one thing about this
+                        // screen a user must never have to guess.
+                        .foregroundStyle(controller.isListening ? Color.red : Color.accentColor)
+                        .symbolEffect(.pulse, isActive: controller.isListening)
                 }
-                .disabled(true)
-                .accessibilityLabel("Talk")
+                .disabled(!controller.canListen && !controller.isListening)
+                .accessibilityLabel(controller.isListening ? "Stop listening" : "Talk")
                 .accessibilityHint(FeatureFlags.voiceInput.userFacingNote ?? "")
             }
         }
