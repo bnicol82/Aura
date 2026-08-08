@@ -157,4 +157,10 @@ protocol AssistantOrchestrating: Sendable {
 
     /// Cancels the in-flight turn, if any.
     func cancelCurrentTurn() async
+
+    /// Hints that the user is about to talk, so the routed provider can load assets ahead of time.
+    ///
+    /// Best-effort and non-throwing: nothing about a turn depends on this having been called, and a failure
+    /// to warm up is not something the user needs told. Called when the conversation screen opens.
+    func prewarm() async
 }

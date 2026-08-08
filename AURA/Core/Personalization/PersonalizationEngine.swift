@@ -77,18 +77,28 @@ struct PersonalizationContext: Sendable, Equatable {
             + outstandingTasks.count
     }
 
-    /// The complete `instructions` string for a `ModelRequest`.
+    /// The part of the context that does not change between turns of a conversation.
     ///
-    /// Assembled here rather than in each provider so every provider receives byte-identical context
-    /// and the privacy audit has one place to look.
-    func modelInstructions(now: Date = Date()) -> String {
+    /// Personality, standing instructions and the user's name. Split out from the retrieved material
+    /// because a provider that keeps a session warm can cache this prefix and re-process only what is new
+    /// — the retrieved knowledge changes every turn, this does not.
+    ///
+    /// The user's name lives here rather than with the retrieved facts: it is identity, not a search
+    /// result, and it is the same on every turn.
+    var stableInstructions: String {
         var sections: [String] = [personalityInstructions]
 
-        var knowledge: [String] = []
-
         if let userName = identity.userPreferredName, !userName.isBlank {
-            knowledge.append("The user's name is \(userName).")
+            sections.append("")
+            sections.append("The user's name is \(userName).")
         }
+
+        return sections.joined(separator: "\n")
+    }
+
+    /// The part of the context assembled fresh for this turn: what retrieval found, and the clock.
+    func turnContext(now: Date = Date()) -> String {
+        var knowledge: [String] = []
 
         if !relevantFacts.isEmpty {
             knowledge.append("")
@@ -131,12 +141,22 @@ struct PersonalizationContext: Sendable, Equatable {
             knowledge.append("You have no stored information relevant to this request. Do not guess at any.")
         }
 
-        sections.append(knowledge.joined(separator: "\n"))
+        // Leading blank entries are an artefact of the section builders above; the join would otherwise
+        // start the turn context with a blank line.
+        while knowledge.first?.isEmpty == true { knowledge.removeFirst() }
 
-        sections.append("")
-        sections.append("The current date and time is \(now.formatted(date: .complete, time: .shortened)).")
+        knowledge.append("")
+        knowledge.append("The current date and time is \(now.formatted(date: .complete, time: .shortened)).")
 
-        return sections.joined(separator: "\n")
+        return knowledge.joined(separator: "\n")
+    }
+
+    /// Everything the model is told, stable and per-turn together.
+    ///
+    /// The single place to look when auditing what left the device (§28), and what a provider that cannot
+    /// exploit the split receives verbatim.
+    func modelInstructions(now: Date = Date()) -> String {
+        stableInstructions + "\n\n" + turnContext(now: now)
     }
 }
 

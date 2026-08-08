@@ -85,6 +85,11 @@ final class ConversationController {
         } catch {
             AuraLog.app.error("Could not look up a conversation to resume.")
         }
+
+        // Detached from `prepare` so the screen never waits on it. Loading the on-device model's assets
+        // takes long enough to be visible on a first reply, and the user opening this screen is the best
+        // available signal that a reply is coming.
+        Task { await orchestrator.prewarm() }
     }
 
     /// Starts a fresh conversation on the next turn.

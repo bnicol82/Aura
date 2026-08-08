@@ -149,7 +149,7 @@ struct AssistantOrchestratorTests {
 
         _ = await harness.orchestrator.send(AssistantRequest(text: "Hello."))
 
-        let instructions = try #require(harness.provider.lastRequest?.instructions)
+        let instructions = try #require(harness.provider.lastRequest?.combinedInstructions)
         #expect(instructions.contains("You are Nova"))
         #expect(instructions.contains("Never claim to remember something that isn't in your context"))
         #expect(instructions.contains("The current date and time is"))
@@ -160,7 +160,7 @@ struct AssistantOrchestratorTests {
         let harness = try Harness()
         _ = await harness.orchestrator.send(AssistantRequest(text: "What's my wife's favourite colour?"))
 
-        let instructions = try #require(harness.provider.lastRequest?.instructions)
+        let instructions = try #require(harness.provider.lastRequest?.combinedInstructions)
         #expect(instructions.contains("You have no stored information relevant to this request"))
     }
 
@@ -181,7 +181,7 @@ struct AssistantOrchestratorTests {
 
         _ = await harness.orchestrator.send(AssistantRequest(text: "What is Blake studying again?"))
 
-        let instructions = try #require(harness.provider.lastRequest?.instructions)
+        let instructions = try #require(harness.provider.lastRequest?.combinedInstructions)
         #expect(instructions.contains("Blake"))
         #expect(instructions.contains("Mechanical Engineering"))
         // Jennifer has nothing to do with this question. §28 is the whole point.
@@ -203,7 +203,7 @@ struct AssistantOrchestratorTests {
 
         _ = await harness.orchestrator.send(AssistantRequest(text: "Who's my favourite NASCAR driver?"))
 
-        let instructions = try #require(harness.provider.lastRequest?.instructions)
+        let instructions = try #require(harness.provider.lastRequest?.combinedInstructions)
         #expect(instructions.contains("Christopher Bell"))
         #expect(!instructions.contains("Aisle"))
     }
@@ -223,7 +223,7 @@ struct AssistantOrchestratorTests {
 
         _ = await harness.orchestrator.send(AssistantRequest(text: "Who's my favourite driver?"))
 
-        let instructions = try #require(harness.provider.lastRequest?.instructions)
+        let instructions = try #require(harness.provider.lastRequest?.combinedInstructions)
         #expect(!instructions.contains("Christopher Bell"))
         #expect(instructions.contains("You have no stored information relevant to this request"))
     }
@@ -238,7 +238,7 @@ struct AssistantOrchestratorTests {
 
         _ = await harness.orchestrator.send(AssistantRequest(text: "How's the weather?"))
 
-        let instructions = try #require(harness.provider.lastRequest?.instructions)
+        let instructions = try #require(harness.provider.lastRequest?.combinedInstructions)
         #expect(instructions.contains("Always show me the numbers"))
         #expect(instructions.contains("take priority over your default style"))
     }
@@ -252,7 +252,7 @@ struct AssistantOrchestratorTests {
             AssistantRequest(text: "What did the doctor say about my blood pressure?")
         )
 
-        let instructions = try #require(harness.provider.lastRequest?.instructions)
+        let instructions = try #require(harness.provider.lastRequest?.combinedInstructions)
         #expect(instructions.contains("This topic is sensitive"))
         #expect(!instructions.contains("Light humour"))
     }

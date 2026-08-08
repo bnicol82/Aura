@@ -117,7 +117,15 @@ struct ModelGenerationOptions: Sendable, Equatable {
 /// reach for the profile or memory stores themselves. That single rule is what keeps §28's
 /// "only what this request needs" promise auditable in one place.
 struct ModelRequest: Sendable {
+    /// The standing part: personality, the user's standing instructions, their name. Identical across
+    /// turns of a conversation, so a provider holding a warm session can cache it.
     var instructions: String
+    /// Assembled fresh for this turn — what retrieval found, and the clock. `nil` when there is none.
+    ///
+    /// Separate from `instructions` because the two have different lifetimes, and a provider that
+    /// re-processes stable text every turn pays for it. Providers that cannot exploit the split use
+    /// `combinedInstructions` and see no difference.
+    var turnContext: String?
     var messages: [ModelMessage]
     var tools: [ToolDefinition]
     var options: ModelGenerationOptions
@@ -125,16 +133,25 @@ struct ModelRequest: Sendable {
 
     init(
         instructions: String,
+        turnContext: String? = nil,
         messages: [ModelMessage],
         tools: [ToolDefinition] = [],
         options: ModelGenerationOptions = .conversation,
         purpose: ModelRequestPurpose = .conversation
     ) {
         self.instructions = instructions
+        self.turnContext = turnContext
         self.messages = messages
         self.tools = tools
         self.options = options
         self.purpose = purpose
+    }
+
+    /// Everything the model is told. The audit answer to "what was sent" (§28).
+    var combinedInstructions: String {
+        guard let turnContext, !turnContext.isBlank else { return instructions }
+        guard !instructions.isBlank else { return turnContext }
+        return instructions + "\n\n" + turnContext
     }
 
     /// Tools actually offered, honouring `options.allowsToolUse`.
@@ -285,6 +302,12 @@ protocol LanguageModelProvider: Sendable {
         _ request: ModelRequest,
         toolInvoker: (any ToolInvoking)?
     ) -> AsyncThrowingStream<ModelStreamEvent, any Error>
+
+    /// Optional hint that a request is likely soon, so the provider can load assets ahead of time.
+    ///
+    /// Best-effort by contract: it must never throw, never block anything the user is waiting on, and
+    /// never be required for correctness. A provider that cannot prewarm inherits a no-op.
+    func prewarm(instructions: String) async
 }
 
 extension LanguageModelProvider {
@@ -320,6 +343,10 @@ extension LanguageModelProvider {
     }
 
     var contextWindowTokens: Int? { nil }
+
+    /// Nothing to warm up. Correct for every provider whose latency is network round-trip rather than
+    /// local asset loading.
+    func prewarm(instructions: String) async {}
 
     func send(_ request: ModelRequest) async throws -> ModelResponse {
         try await send(request, toolInvoker: nil)

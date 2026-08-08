@@ -98,6 +98,45 @@ actor AssistantOrchestrator: AssistantOrchestrating {
         activeTurn = nil
     }
 
+    /// Warms the provider the next turn would most likely use.
+    ///
+    /// Deliberately cheap: it routes and asks the provider to prewarm with the *stable* instructions only.
+    /// No retrieval runs, because retrieval needs a message that has not been typed yet — and doing it here
+    /// would both waste work and assemble personal context for a request that may never happen.
+    ///
+    /// Every failure is swallowed. Prewarming is an optimisation, and a warm-up that reported errors to the
+    /// user would be worse than no warm-up at all.
+    func prewarm() async {
+        do {
+            let assistantProfile = try await assistantProfileStore.currentProfile()
+            let isOnline = await networkMonitor.isOnline
+            let (provider, _) = try await router.route(
+                purpose: .conversation,
+                context: RoutingContext(
+                    aiMode: assistantProfile.aiMode,
+                    isOnline: isOnline,
+                    requiresToolSupport: false
+                )
+            )
+
+            let context = try await personalizationEngine.buildContext(
+                for: PersonalizationRequest(
+                    userMessage: "",
+                    conversationID: nil,
+                    recentTurns: [],
+                    now: Date(),
+                    // Nothing retrieved: the stable half is all that is needed, and it is all that is
+                    // byte-identical to what the next real turn will send.
+                    budget: .none
+                )
+            )
+
+            await provider.prewarm(instructions: context.stableInstructions)
+        } catch {
+            AuraLog.orchestrator.debug("Prewarm skipped: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     // MARK: - The pipeline
 
     private func perform(
@@ -175,7 +214,10 @@ actor AssistantOrchestrator: AssistantOrchestrating {
 
             // 5. Generation.
             let modelRequest = ModelRequest(
-                instructions: context.modelInstructions(now: request.now),
+                // Split so a provider holding a warm session re-processes only what changed. The two
+                // together are exactly what `modelInstructions` used to be — see `combinedInstructions`.
+                instructions: context.stableInstructions,
+                turnContext: context.turnContext(now: request.now),
                 messages: Self.modelMessages(history: history, latestUserText: text),
                 tools: [],
                 options: .conversation,

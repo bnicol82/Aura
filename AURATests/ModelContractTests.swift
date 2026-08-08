@@ -253,6 +253,90 @@ struct PersonalizationContextTests {
         #expect(instructions.contains("Do not guess"))
     }
 
+    // MARK: Stable / per-turn split
+
+    @Test("The stable half holds identity and carries nothing that changes between turns")
+    func stableInstructionsExcludePerTurnMaterial() {
+        let fact = ProfileFactSnapshot(
+            id: UUID(),
+            key: "Favourite driver",
+            value: "Christopher Bell",
+            category: .sports,
+            confidence: AuraDefaults.Confidence.explicit,
+            isPinned: false,
+            isArchived: false,
+            sourceMemoryID: nil,
+            supersededByFactID: nil,
+            createdAt: .now,
+            updatedAt: .now
+        )
+        let assembled = context(userName: "Alex", facts: [fact])
+
+        // Identity belongs to the stable half: it is the same on every turn.
+        #expect(assembled.stableInstructions.contains("Alex"))
+
+        // Retrieval results and the clock do not — they are what makes a turn different from the last one.
+        #expect(!assembled.stableInstructions.contains("Christopher Bell"))
+        #expect(!assembled.stableInstructions.contains("The current date and time is"))
+    }
+
+    @Test("The per-turn half holds what retrieval found, and the clock")
+    func turnContextHoldsRetrievedMaterial() {
+        let fact = ProfileFactSnapshot(
+            id: UUID(),
+            key: "Favourite driver",
+            value: "Christopher Bell",
+            category: .sports,
+            confidence: AuraDefaults.Confidence.explicit,
+            isPinned: false,
+            isArchived: false,
+            sourceMemoryID: nil,
+            supersededByFactID: nil,
+            createdAt: .now,
+            updatedAt: .now
+        )
+        let turn = context(userName: "Alex", facts: [fact]).turnContext()
+
+        #expect(turn.contains("Christopher Bell"))
+        #expect(turn.contains("The current date and time is"))
+        #expect(!turn.hasPrefix("\n"))
+    }
+
+    @Test("Splitting loses nothing: the two halves together are what a provider used to receive")
+    func splitIsLossless() {
+        // The point of the split is caching, not censorship. Anything that fell out of both halves would be
+        // context silently dropped, which no test of either half alone would catch.
+        let now = Date(timeIntervalSince1970: 1_770_000_000)
+        let assembled = context(userName: "Alex")
+
+        #expect(
+            assembled.modelInstructions(now: now)
+                == assembled.stableInstructions + "\n\n" + assembled.turnContext(now: now)
+        )
+    }
+
+    @Test("A request's combined instructions are the two halves, and tolerate either being absent")
+    func combinedInstructionsJoinBothHalves() {
+        let both = ModelRequest(
+            instructions: "You are Nova.",
+            turnContext: "The current date and time is Tuesday.",
+            messages: [.user("Hi")]
+        )
+        #expect(both.combinedInstructions == "You are Nova.\n\nThe current date and time is Tuesday.")
+
+        // No stray separator when one side is missing — a provider receiving a leading blank line would be
+        // getting a subtly different prompt than intended.
+        let stableOnly = ModelRequest(instructions: "You are Nova.", messages: [.user("Hi")])
+        #expect(stableOnly.combinedInstructions == "You are Nova.")
+
+        let turnOnly = ModelRequest(
+            instructions: "  ",
+            turnContext: "Just context.",
+            messages: [.user("Hi")]
+        )
+        #expect(turnOnly.combinedInstructions == "Just context.")
+    }
+
     @Test("Relevant knowledge appears under headings the model can use")
     func includesRelevantKnowledge() {
         let fact = ProfileFactSnapshot(

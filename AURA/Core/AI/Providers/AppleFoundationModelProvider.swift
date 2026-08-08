@@ -322,24 +322,62 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
         .text(Transcript.TextSegment(id: UUID().uuidString, content: content))
     }
 
-    /// Renders only the turn being taken. History lives in the transcript.
+    /// Renders the turn being taken, preceded by this turn's context.
+    ///
+    /// The per-turn context goes here rather than into the transcript's instructions entry, which is what
+    /// makes the split worth having: the instructions entry stays byte-identical between turns and can be
+    /// prewarmed, while the material that changes every turn rides with the prompt that changes anyway.
+    ///
+    /// History lives in the transcript.
     static func renderTurnPrompt(for request: ModelRequest) -> String {
         guard let latest = request.messages.last else { return "" }
 
+        let turn: String
         switch latest.role {
         case .user:
-            return latest.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            turn = latest.text.trimmingCharacters(in: .whitespacesAndNewlines)
         case .assistant:
             // An assistant-final request is a continuation, not a question.
             let text = latest.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? "" : "Continue from where you left off:\n\(text)"
+            turn = text.isEmpty ? "" : "Continue from where you left off:\n\(text)"
         case .tool:
             let name = latest.toolName ?? "tool"
             let text = latest.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty
+            turn = text.isEmpty
                 ? ""
                 : "Result from \(name):\n\(text)\n\nAnswer the user using this result."
         }
+
+        // An empty turn stays empty: `prepare` treats that as nothing to send, and prefixing context onto
+        // nothing would turn a no-op into a request that asks the model to answer silence.
+        guard !turn.isEmpty else { return "" }
+
+        guard let context = request.turnContext, !context.isBlank else { return turn }
+        return context + "\n\n" + turn
+    }
+
+    // MARK: - Prewarming
+
+    /// Loads model assets ahead of a likely request, using the stable instructions as the prefix.
+    ///
+    /// Called when the conversation screen opens, so the first reply of a session does not pay for asset
+    /// loading while the user watches. Deliberately silent on unavailability: prewarming a model that is not
+    /// there is a no-op, not an error worth telling anyone about.
+    func prewarm(instructions: String) async {
+        guard Self.mapAvailability(model.availability).isAvailable else { return }
+
+        let session = LanguageModelSession(
+            model: model,
+            tools: [],
+            transcript: Transcript(entries: [
+                .instructions(Transcript.Instructions(
+                    id: UUID().uuidString,
+                    segments: [Self.textSegment(instructions)],
+                    toolDefinitions: []
+                ))
+            ])
+        )
+        session.prewarm()
     }
 
     // MARK: - Error mapping

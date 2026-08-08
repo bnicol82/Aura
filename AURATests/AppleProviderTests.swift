@@ -149,6 +149,41 @@ struct AppleProviderTests {
         #expect(Self.kinds(of: entries) == ["prompt", "response"])
     }
 
+    @Test("Per-turn context rides with the prompt, not with the stable instructions")
+    func turnContextRidesWithThePrompt() throws {
+        // What makes the split worth having: the instructions entry stays byte-identical between turns so it
+        // can be prewarmed, while the material that changes every turn travels with the prompt that changes
+        // anyway. If per-turn context leaked into the instructions entry, the cached prefix would be
+        // invalidated on every single turn and the split would buy nothing.
+        let request = ModelRequest(
+            instructions: "You are Nova.",
+            turnContext: "TURN_MARKER: what you know about the user.",
+            messages: [.user("What did I decide?")]
+        )
+
+        let prompt = AppleFoundationModelProvider.renderTurnPrompt(for: request)
+        #expect(prompt.contains("TURN_MARKER"))
+        #expect(prompt.contains("What did I decide?"))
+
+        let entries = Array(AppleFoundationModelProvider.makeTranscript(for: request))
+        let instructions = try #require(entries.first)
+        #expect(Self.kinds(of: [instructions]) == ["instructions"])
+        #expect(Self.text(of: instructions) == "You are Nova.")
+        #expect(!Self.text(of: instructions).contains("TURN_MARKER"))
+    }
+
+    @Test("An empty turn stays empty rather than becoming a request to answer silence")
+    func emptyTurnIsNotRescuedByContext() {
+        // `prepare` treats an empty prompt as nothing to send. Prefixing context onto nothing would turn
+        // that no-op into a request with context and no question.
+        let request = ModelRequest(
+            instructions: "You are Nova.",
+            turnContext: "Plenty of context.",
+            messages: []
+        )
+        #expect(AppleFoundationModelProvider.renderTurnPrompt(for: request).isEmpty)
+    }
+
     // MARK: Snapshot diffing
 
     @Test("Cumulative snapshots become append-only deltas")

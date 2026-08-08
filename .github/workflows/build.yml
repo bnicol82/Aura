@@ -101,6 +101,12 @@ jobs:
       - name: Report build result
         if: always()
         run: |
+          # Printed because the GitHub API's per-step `conclusion` is NOT the truth for a
+          # `continue-on-error` step: a failed step reports conclusion "success" and only `outcome` says
+          # "failure". Anyone reading this job through the API — including an agent — will misread a failed
+          # run as green unless the real outcomes are in the log. That has already happened once here.
+          echo "STEP OUTCOME build=${{ steps.build.outcome }}"
+
           echo "===== BEGIN BUILD REPORT ====="
           if [ -s build/errors.txt ]; then
             cat build/errors.txt
@@ -140,6 +146,9 @@ jobs:
       - name: Report test result
         if: always() && steps.build.outcome == 'success'
         run: |
+          # See the note in "Report build result": `outcome`, not `conclusion`, is the real result.
+          echo "STEP OUTCOME test=${{ steps.test.outcome }}"
+
           echo "===== BEGIN TEST REPORT ====="
           if [ -s build/test-results.txt ]; then
             cat build/test-results.txt

@@ -236,11 +236,57 @@ that would have quietly proven nothing into one that fails loudly the day it sto
   honestly needs the tool-call entry it answers and tools are Phase 10.
 - Token usage is still `nil` on this provider — `LanguageModelSession.Usage` is iOS 27.
 
+### Stable and per-turn context, split
+
+`PersonalizationContext` now exposes two halves instead of one blob:
+
+- `stableInstructions` — personality, the user's standing instructions, their name. Identical on every turn
+  of a conversation.
+- `turnContext(now:)` — what retrieval found, and the clock. Rebuilt every turn by definition.
+
+`modelInstructions(now:)` is still there and is exactly the two joined, so nothing that audits "what the
+model was told" has to know about the split. `ModelRequest` mirrors it with `instructions` +
+`turnContext`, and `combinedInstructions` for providers that cannot exploit the difference.
+
+The Apple provider puts the stable half in the transcript's instructions entry and the per-turn half with
+the prompt. That is the whole point: the instructions entry stays byte-identical between turns, so it can
+be prewarmed and cached, while the material that changes every turn rides with the prompt that changes
+anyway. A test asserts the per-turn context does **not** reach the instructions entry, because if it leaked
+there the cached prefix would be invalidated every turn and the split would buy nothing.
+
+There is also a test that the split is lossless — the two halves joined equal what a provider used to
+receive. Anything that fell out of both halves would be context silently dropped, and no test of either
+half alone would notice.
+
+### Prewarming
+
+`LanguageModelProvider.prewarm(instructions:)`, defaulting to a no-op, implemented on the Apple provider
+via `session.prewarm()`. `AssistantOrchestrating.prewarm()` routes and warms the provider the next turn
+would use; `ConversationController` calls it in a detached task when the conversation screen opens, so the
+screen never waits on it.
+
+It deliberately runs **no retrieval** — retrieval needs a message that has not been typed yet, and doing it
+speculatively would both waste work and assemble personal context for a request that may never happen. Only
+the stable half is warmed, which is precisely the part that will be identical when the real turn arrives.
+
+Every failure is swallowed by contract. A warm-up that reported errors to the user would be worse than no
+warm-up.
+
+### One CI fix, from a mistake this stage made
+
+The GitHub API's per-step `conclusion` is **not** the result for a `continue-on-error` step: a failed step
+reports `conclusion: "success"`, and only `outcome` says `failure`. Reading `conclusion` is how run 10's
+test failure got reported as passing before the log was checked properly.
+
+Both report steps now print `STEP OUTCOME build=…` / `STEP OUTCOME test=…` into the job log, so the real
+result is greppable and no reader has to know that distinction to avoid being misled by it.
+
 ### Next implementation step
 
-The three remaining Phase 3 items: `prewarm()` on conversation open, a rolling summary so threads longer
-than the working-memory window stay coherent, and the stable/per-turn context split that makes a warm
-session worth keeping.
+The last Phase 3 item: a rolling conversation summary, so threads longer than the working-memory window
+stay coherent. `Conversation.summary` and `ConversationStoring.updateSummary` already exist from Phase 1, so
+this needs no schema change — it needs a summarizer, a decision about when to refresh, and injection of the
+summary into the transcript.
 
 ---
 
