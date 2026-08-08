@@ -190,35 +190,78 @@ struct AuraErrorTests {
 @Suite("Feature staging")
 struct FeatureStageTests {
 
-    @Test("A pending capability always says what it is waiting on")
-    func pendingStagesExplainThemselves() {
-        let stages: [FeatureStage] = [
-            FeatureFlags.textConversation,
-            FeatureFlags.voiceInput,
-            FeatureFlags.voiceOutput,
-            FeatureFlags.conversationHistory,
-            FeatureFlags.memory,
-            FeatureFlags.cloudSync,
-            FeatureFlags.tools,
-            FeatureFlags.systemIntegrations,
-            FeatureFlags.appIntents,
-            FeatureFlags.activityLog,
-            FeatureFlags.dataExport
-        ]
+    // These tests derive from `FeatureFlags.all` rather than restating which capabilities are pending.
+    // The earlier version kept its own hardcoded list and failed the moment Phase 2 flipped two flags
+    // to `.live` — asserting the previous phase's reality against current code. A test that has to be
+    // edited every time the thing it tests changes is a liability, not a safety net.
 
-        for stage in stages {
-            #expect(!stage.isLive)
-            #expect(stage.userFacingNote?.isEmpty == false)
-            #expect(stage.badgeText?.isEmpty == false)
+    @Test("Every pending capability says what it is waiting on")
+    func pendingStagesExplainThemselves() {
+        for flag in FeatureFlags.pending {
+            #expect(
+                flag.stage.userFacingNote?.isEmpty == false,
+                "\(flag.name) is pending but has no note for the user"
+            )
+            #expect(
+                flag.stage.badgeText?.isEmpty == false,
+                "\(flag.name) is pending but has no phase badge"
+            )
         }
     }
 
-    @Test("What Phase 1 delivered is marked live and carries no note")
+    @Test("Every live capability is silent")
     func liveStagesAreSilent() {
-        #expect(FeatureFlags.manualProfileEditing.isLive)
-        #expect(FeatureFlags.personalityCustomization.isLive)
-        #expect(FeatureFlags.manualProfileEditing.userFacingNote == nil)
-        #expect(FeatureFlags.personalityCustomization.badgeText == nil)
+        for flag in FeatureFlags.live {
+            #expect(
+                flag.stage.userFacingNote == nil,
+                "\(flag.name) is live but still carries a pending note"
+            )
+            #expect(
+                flag.stage.badgeText == nil,
+                "\(flag.name) is live but still carries a phase badge"
+            )
+        }
+    }
+
+    @Test("The registry partitions cleanly into live and pending")
+    func registryPartitions() {
+        // Enumerating `static let`s to prove none was forgotten would need reflection, so that is not
+        // checked here — a second hardcoded mirror of the flag list would just be the same staleness
+        // hazard wearing a different hat. What is checked is that `all` is populated and that the two
+        // derived views account for every entry exactly once.
+        #expect(!FeatureFlags.all.isEmpty)
+        #expect(FeatureFlags.live.count + FeatureFlags.pending.count == FeatureFlags.all.count)
+
+        let liveNames = Set(FeatureFlags.live.map(\.name))
+        let pendingNames = Set(FeatureFlags.pending.map(\.name))
+        #expect(liveNames.isDisjoint(with: pendingNames))
+    }
+
+    @Test("Flag names are unique, so a failure message identifies one capability")
+    func flagNamesAreUnique() {
+        let names = FeatureFlags.all.map(\.name)
+        #expect(Set(names).count == names.count)
+    }
+
+    @Test("Pending capabilities are ordered by the phase that delivers them")
+    func pendingIsOrderedByPhase() {
+        let phases = FeatureFlags.pending.compactMap { flag -> Int? in
+            guard case .pending(let phase, _, _) = flag.stage else { return nil }
+            return phase
+        }
+        #expect(phases == phases.sorted())
+    }
+
+    @Test("Phase 2 delivered a working conversation, and voice is still to come")
+    func currentStateMatchesPhase2() {
+        // A deliberate check on the honesty invariant at this specific point in the build: typing works,
+        // talking does not, and the flags say exactly that.
+        #expect(FeatureFlags.textConversation.isLive)
+        #expect(FeatureFlags.conversationHistory.isLive)
+        #expect(!FeatureFlags.voiceInput.isLive)
+        #expect(!FeatureFlags.tools.isLive)
+        #expect(!FeatureFlags.live.isEmpty)
+        #expect(!FeatureFlags.pending.isEmpty)
     }
 }
 

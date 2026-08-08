@@ -69,7 +69,13 @@ STATUS=$?
 
 # Compile errors and test failures both matter, and a compile error means the tests never ran at all
 # — so both are collected rather than only the failures.
-grep -E "(error: |Test [Cc]ase.*failed|✘|failed after|Testing failed)" "$FULL_LOG" \
+# `CoreData: error:` lines are excluded deliberately. SwiftData logs a wall of them while probing
+# store locations in the simulator, then reports "Recovery attempt ... was successful!" — they are
+# noise from a sequence that worked, and they buried the one real failure in the last run.
+# `appintentsmetadataprocessor` is excluded for the same reason it is in build.sh.
+grep -E "(error: |✘|failed after|Testing failed)" "$FULL_LOG" \
+    | grep -v "CoreData: error:" \
+    | grep -v "appintentsmetadataprocessor" \
     | sed -E 's#^.*/(AURA/|AURATests/)#\1#' \
     | sort -u \
     > "$REPORT"

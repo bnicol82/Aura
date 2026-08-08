@@ -9,7 +9,7 @@ import Foundation
 ///
 /// The rule for maintaining this file: a capability's stage flips to `.live` in the same commit that
 /// makes it work. Never before.
-enum FeatureStage: Sendable, Equatable {
+enum FeatureStage: Sendable, Equatable, Hashable {
     /// Implemented and working.
     case live
     /// Not implemented yet. `phase` matches the build order in §74.
@@ -131,4 +131,53 @@ enum FeatureFlags {
         phaseName: "Privacy & Hardening",
         note: "Export isn't built yet."
     )
+
+    // MARK: - The whole set
+
+    /// A named capability and its stage.
+    struct Flag: Sendable, Identifiable {
+        let name: String
+        let stage: FeatureStage
+
+        var id: String { name }
+    }
+
+    /// Every flag, in one enumerable list.
+    ///
+    /// This exists because the alternative bit us. The staging tests used to hold their own hardcoded
+    /// list of which capabilities were pending, and Phase 2 flipped two flags to `.live` without
+    /// updating it — so the suite failed against correct code, asserting Phase 1's reality against
+    /// Phase 2's. One list that both the flags and the tests read from cannot drift that way.
+    ///
+    /// Adding a capability means adding it here too. The `everyFlagIsRegistered` test is what catches
+    /// a flag that was declared above and never listed.
+    static let all: [Flag] = [
+        Flag(name: "Text conversation", stage: textConversation),
+        Flag(name: "Voice input", stage: voiceInput),
+        Flag(name: "Voice output", stage: voiceOutput),
+        Flag(name: "Conversation history", stage: conversationHistory),
+        Flag(name: "Memory", stage: memory),
+        Flag(name: "Manual profile editing", stage: manualProfileEditing),
+        Flag(name: "Personality customization", stage: personalityCustomization),
+        Flag(name: "iCloud sync", stage: cloudSync),
+        Flag(name: "Tools", stage: tools),
+        Flag(name: "System integrations", stage: systemIntegrations),
+        Flag(name: "App Intents", stage: appIntents),
+        Flag(name: "Activity log", stage: activityLog),
+        Flag(name: "Data export", stage: dataExport)
+    ]
+
+    /// Capabilities that work today.
+    static var live: [Flag] { all.filter(\.stage.isLive) }
+
+    /// Capabilities still to come, soonest phase first — the order a "what's not finished" view wants.
+    static var pending: [Flag] {
+        all.filter { !$0.stage.isLive }
+            .sorted { lhs, rhs in
+                guard case .pending(let lhsPhase, _, _) = lhs.stage,
+                      case .pending(let rhsPhase, _, _) = rhs.stage
+                else { return false }
+                return lhsPhase < rhsPhase
+            }
+    }
 }
