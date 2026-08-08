@@ -9,6 +9,12 @@ import Foundation
 /// without wrapping a non-Sendable object in unchecked promises. A `@MainActor` class is implicitly
 /// `Sendable`, so it still satisfies the protocol.
 ///
+/// ### Why the pure helpers are `nonisolated`
+/// `@MainActor` on the type isolates its *static* members too, which is wrong for three pure functions that
+/// touch no state: it made them unusable from a synchronous test and would force any caller onto the main
+/// actor for arithmetic. Marking them `nonisolated` is the fix rather than pushing the test suite onto the
+/// main actor, which would have hidden the mistake instead of correcting it.
+///
 /// ### The one permanent constraint
 /// AURA never imitates a real person's voice — no cloning, no likeness of a named individual. That is a
 /// product rule, not a limitation of this backend, and it survives any future TTS engine.
@@ -57,7 +63,7 @@ final class SystemSpeechSynthesisService: NSObject, SpeechSynthesisService {
     /// Maps a system voice onto AURA's own type.
     ///
     /// `static` and pure so the mapping is testable without a speech engine.
-    static func voice(from voice: AVSpeechSynthesisVoice) -> AssistantVoice {
+    nonisolated static func voice(from voice: AVSpeechSynthesisVoice) -> AssistantVoice {
         AssistantVoice(
             id: voice.identifier,
             displayName: voice.name,
@@ -74,7 +80,7 @@ final class SystemSpeechSynthesisService: NSObject, SpeechSynthesisService {
     ///
     /// `en_US` and `en-GB` match; `en_US` and `fr_FR` do not. Apple mixes `_` and `-` between APIs, which is
     /// exactly the sort of thing that silently sorts every voice into the wrong bucket.
-    static func languagesMatch(_ lhs: String, _ rhs: String) -> Bool {
+    nonisolated static func languagesMatch(_ lhs: String, _ rhs: String) -> Bool {
         func language(_ identifier: String) -> String {
             let normalized = identifier.replacingOccurrences(of: "_", with: "-")
             return String(normalized.split(separator: "-").first ?? "").lowercased()
@@ -131,7 +137,7 @@ final class SystemSpeechSynthesisService: NSObject, SpeechSynthesisService {
     ///
     /// `static` and pure because the mapping is the sort of arithmetic that is wrong by a factor of two for
     /// months before anyone notices. 0.5 means "the system default", not "half speed".
-    static func utteranceRate(from rate: Double) -> Float {
+    nonisolated static func utteranceRate(from rate: Double) -> Float {
         let clamped = min(max(rate, 0), 1)
         let minimum = Double(AVSpeechUtteranceMinimumSpeechRate)
         let maximum = Double(AVSpeechUtteranceMaximumSpeechRate)
