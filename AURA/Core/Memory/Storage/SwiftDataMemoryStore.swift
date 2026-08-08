@@ -106,15 +106,15 @@ actor SwiftDataMemoryStore: MemoryStoring {
     func pruneExpired(asOf date: Date) async throws -> Int {
         // Expiry is the mechanism that stops "for the rest of today" becoming permanent, so it deletes
         // rather than archives — an expired temporary note has no historical value.
-        let descriptor = FetchDescriptor<MemoryItem>(
-            predicate: #Predicate { item in
-                if let expiresAt = item.expiresAt {
-                    return expiresAt <= date
-                }
-                return false
-            }
-        )
-        let expired = try modelContext.fetch(descriptor)
+        //
+        // Filtered in Swift rather than in a `#Predicate`, for the same reason as `fetchCandidates`: a
+        // predicate body must be a single expression, so unwrapping an optional `Date` inside one means
+        // either a force-unwrap the macro has to translate or a contortion nobody can read. Pruning is
+        // maintenance that runs rarely, so fetching and filtering costs nothing that matters.
+        let expired = try modelContext.fetch(FetchDescriptor<MemoryItem>()).filter { item in
+            guard let expiresAt = item.expiresAt else { return false }
+            return expiresAt <= date
+        }
         guard !expired.isEmpty else { return 0 }
 
         for item in expired {
@@ -268,18 +268,23 @@ actor SwiftDataMemoryStore: MemoryStoring {
     private func fetchCandidates(for query: MemoryQuery) throws -> [MemoryItem] {
         let includeArchived = query.includeArchived
         let includeSuperseded = query.includeSuperseded
-        let after = query.createdAfter
-        let before = query.createdBefore
-        let minimumImportance = query.minimumImportance
         let now = Date()
+
+        // Optional bounds are collapsed into sentinels *before* the predicate rather than tested inside it.
+        // A `#Predicate` body must be a single expression, so an absent bound would otherwise need
+        // `after == nil || item.createdAt >= after!` — a force-unwrap for the macro to translate, on a value
+        // that is not even a model property. An open range says the same thing with nothing to translate.
+        let after = query.createdAfter ?? .distantPast
+        let before = query.createdBefore ?? .distantFuture
+        let minimumImportance = query.minimumImportance ?? 0
 
         let descriptor = FetchDescriptor<MemoryItem>(
             predicate: #Predicate { item in
                 (includeArchived || !item.isArchived)
                     && (includeSuperseded || item.supersededByMemoryID == nil)
-                    && (after == nil || item.createdAt >= after!)
-                    && (before == nil || item.createdAt <= before!)
-                    && (minimumImportance == nil || item.importance >= minimumImportance!)
+                    && item.createdAt >= after
+                    && item.createdAt <= before
+                    && item.importance >= minimumImportance
             },
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
