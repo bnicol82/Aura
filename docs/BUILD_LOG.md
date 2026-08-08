@@ -81,6 +81,46 @@ hardware with Apple Intelligence enabled. The first genuine conversation is stil
 
 ---
 
+## Phases 5, 6 and 7 — status
+
+**Verified by CI run 24: build clean, whole suite passing.** The first fully green run since Phase 2, and it
+covers nine commits at once.
+
+| Phase | State |
+|---|---|
+| 5 — Voice | Services, permissions and UI wiring done; `voiceInput`/`voiceOutput` live. **Never run against a microphone.** |
+| 6 — History | Complete. Browsing, archive search, rename/pin/archive/delete. |
+| 7 — Memory | **Half done.** Retention policy and store written and tested; extraction, retrieval and consolidation are not. `memory` stays pending. |
+
+### What nine unverified commits actually cost
+
+Voice through the memory store accumulated without a compile check, because each push cancelled the run
+before it. Five rounds to clear:
+
+| Round | What it was |
+|---|---|
+| 1 | `#Predicate` body with an `if let` — a predicate must be one expression |
+| 2 | `@MainActor` on a type isolates its *static* members too, so three pure helpers were uncallable from a synchronous test |
+| 3 | Two memberwise initialisers written in prose order instead of declaration order |
+| 4 | A test asserting "voice is not live yet" — it failed *because the project shipped voice* |
+
+No design defects, and no invented Apple API. The failures were Swift-dialect slips and one stale
+expectation, which is the pattern worth noting: the doc-verification passes are doing their job, and what
+remains is the stuff only a compiler can tell you.
+
+Two habits came out of it. When the compiler names some call sites, check *all* of them mechanically — that
+found nothing further in the argument-order case but was the right move regardless. And a test that pins the
+current phase will fail on the commit that makes progress, so assert the invariant instead; that mistake has
+now been made twice in the same suite.
+
+### Still true, and the thing that matters most
+
+None of this has run on a phone. The on-device model has never answered, the microphone has never opened,
+and no reply has ever been spoken aloud. 267 tests pass against mocks; a simulator has no Apple Intelligence
+and no audio input. **AURA is thoroughly verified and has never been used.**
+
+---
+
 ## What looking at the screens found
 
 CI run 7 produced the first images of AURA (`docs/SCREENSHOTS.md`). Worth recording plainly: the app had
@@ -324,8 +364,8 @@ instructions.
 
 ### Phase 3 status
 
-All five items written. Streaming and transcript history are CI-verified; the context split, prewarming and
-this summary are pending a run.
+**Complete and verified.** All five items — streaming, transcript history, the context split, prewarming and
+the rolling summary — confirmed by CI run 24.
 
 ### Next implementation step
 
