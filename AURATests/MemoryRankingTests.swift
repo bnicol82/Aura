@@ -185,12 +185,63 @@ struct MemoryRankingTests {
     func irrelevantMemoriesAreDropped() async throws {
         // Padding the budget with irrelevant memories is worse than sending fewer: it spends context and
         // ships personal material the request never needed (§28).
+        //
+        // This test found a real bug. The ranker filtered on `total > 0`, and a memory written minutes ago
+        // scores 1.0 on recency alone — so a brand-new note about cheese was retrieved for a question about
+        // the garage. Recency is a modifier on relevance, not a source of it.
         let engine = try Self.makeEngine()
         let ranked = await engine.rank(
-            memories: [memory("Completely unrelated cheese preferences", importance: 0)],
+            memories: [memory("Completely unrelated cheese preferences", importance: 0, createdAt: now)],
             for: RetrievalRequest(text: "garage renovation October", now: now)
         )
         #expect(ranked.isEmpty)
+    }
+
+    @Test("Recency, importance and usage cannot make an unrelated memory relevant")
+    func modifiersAloneDoNotQualify() {
+        // The rule the bug above violated, asserted directly on `qualifies` so it cannot regress quietly
+        // through some other path into `rank`.
+        var modifiersOnly = MemoryRelevanceScore()
+        modifiersOnly.recency = 1
+        modifiersOnly.importance = 1
+        modifiersOnly.usage = 1
+        #expect(modifiersOnly.total > 0)
+        #expect(!DefaultMemoryRetrieval.qualifies(modifiersOnly))
+
+        // And each of the five things that *are* relevance qualifies on its own. Typed explicitly rather
+        // than inferred through the loop pattern, which is a needless place to risk a compile error.
+        let relevanceSources: [(String, (inout MemoryRelevanceScore) -> Void)] = [
+            ("wording", { $0.keywordOverlap = 0.1 }),
+            ("entity", { $0.entityMatch = 0.1 }),
+            ("meaning", { $0.semanticSimilarity = 0.1 }),
+            ("pinned", { $0.pinned = 1 }),
+            ("same conversation", { $0.contextualLink = 1 })
+        ]
+        for (name, makeRelevant) in relevanceSources {
+            var score = MemoryRelevanceScore()
+            makeRelevant(&score)
+            #expect(DefaultMemoryRetrieval.qualifies(score), "\(name) should qualify on its own")
+        }
+    }
+
+    @Test("A pinned or same-conversation memory is kept even with no wording match")
+    func pinnedAndThreadMemoriesSurvive() async throws {
+        // Both are genuine relevance rather than topical overlap: pinning is the user saying "always consider
+        // this", and a memory from this very thread is about what is being discussed by definition.
+        let engine = try Self.makeEngine()
+        let conversationID = UUID()
+
+        let ranked = await engine.rank(
+            memories: [
+                memory("Never book anything without asking me.", importance: 0, isPinned: true),
+                memory("Something said earlier in this thread.", importance: 0, conversationID: conversationID),
+                memory("Entirely unrelated and not pinned.", importance: 0)
+            ],
+            for: RetrievalRequest(text: "zzzz nothing matches", conversationID: conversationID, now: now)
+        )
+
+        #expect(ranked.count == 2)
+        #expect(!ranked.contains { $0.memory.content.contains("Entirely unrelated") })
     }
 
     @Test("Better matches rank first, and ties fall back to recency")

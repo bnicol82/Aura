@@ -70,14 +70,34 @@ struct DefaultMemoryRetrieval: MemoryRetrieving {
     func rank(memories: [MemorySnapshot], for request: RetrievalRequest) async -> [RankedMemory] {
         memories
             .map { RankedMemory(memory: $0, score: Self.score($0, for: request)) }
-            // Anything scoring nothing at all is dropped rather than padding the budget: sending a model
-            // an irrelevant memory is worse than sending it fewer (§28).
-            .filter { $0.score.total > 0 }
+            // Relevance is required, not merely a positive total. See `qualifies(_:)`.
+            .filter { Self.qualifies($0.score) }
             .sorted { lhs, rhs in
                 lhs.score.total == rhs.score.total
                     ? lhs.memory.createdAt > rhs.memory.createdAt
                     : lhs.score.total > rhs.score.total
             }
+    }
+
+    /// Whether a score represents an actual reason to recall this memory for *this* request.
+    ///
+    /// The distinction the first version of this got wrong, and the test caught: **recency, importance and
+    /// usage are modifiers on relevance, not sources of it.** Filtering on `total > 0` meant a memory created
+    /// minutes ago scored 1.0 on recency alone and was retrieved for a completely unrelated question — a
+    /// brand-new note about cheese shipped to the model when the user asked about the garage. That is exactly
+    /// the §28 leak this layer exists to prevent, and it would have been invisible in use: extra context
+    /// rarely makes an answer visibly wrong, it just quietly sends more than the request needed.
+    ///
+    /// So relevance has to come from one of five things: the wording matches, an entity matches, the meaning
+    /// matches (when embeddings exist), the user pinned it, or it belongs to the conversation in play. Those
+    /// last two are genuine relevance rather than topical overlap — pinning is the user saying "always
+    /// consider this", and a memory from this very thread is about what is being discussed by definition.
+    static func qualifies(_ score: MemoryRelevanceScore) -> Bool {
+        score.semanticSimilarity > 0
+            || score.keywordOverlap > 0
+            || score.entityMatch > 0
+            || score.pinned > 0
+            || score.contextualLink > 0
     }
 
     // MARK: - Scoring
