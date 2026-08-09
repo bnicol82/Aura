@@ -33,7 +33,21 @@ import Foundation
 /// | `EKReminder.dueDateComponents` | `DateComponents?`, not a `Date` |
 actor EventKitCalendarService: CalendarServicing {
 
-    private let store: EKEventStore
+    /// Created on first use, never in `init`.
+    ///
+    /// `EKEventStore()` opens the calendar database and handshakes with the calendar daemon, and
+    /// `AppEnvironment` is constructed inside `AuraApp.init()` — before any view exists. Building one
+    /// eagerly therefore put that handshake on the critical path of every single launch, including the
+    /// overwhelming majority that never touch the calendar. It also means an app the user has never
+    /// pointed at their calendar does not open it.
+    ///
+    /// Lazily is safe here precisely because this is an actor: two concurrent first-uses serialise, so
+    /// exactly one store is ever created. The status checks deliberately do not force creation —
+    /// `EKEventStore.authorizationStatus(for:)` is a type method — so a refused permission never opens
+    /// the database at all.
+    private var lazyStore: EKEventStore?
+    /// Injected by tests that need to observe the store. `nil` means "make one when first needed".
+    private let injectedStore: EKEventStore?
 
     /// How long an event runs when the model did not say.
     ///
@@ -41,8 +55,16 @@ actor EventKitCalendarService: CalendarServicing {
     /// a duration is visible and the tool can tell the user what it assumed.
     static let defaultEventDuration: TimeInterval = 60 * 60
 
-    init(store: EKEventStore = EKEventStore()) {
-        self.store = store
+    init(store: EKEventStore? = nil) {
+        self.injectedStore = store
+        self.lazyStore = store
+    }
+
+    private func store() -> EKEventStore {
+        if let lazyStore { return lazyStore }
+        let created = injectedStore ?? EKEventStore()
+        lazyStore = created
+        return created
     }
 
     // MARK: - Events
@@ -54,8 +76,8 @@ actor EventKitCalendarService: CalendarServicing {
         // instead of trusted. A model producing end-before-start is common enough to plan for.
         let (from, to) = Self.orderedRange(start, end)
 
-        let predicate = store.predicateForEvents(withStart: from, end: to, calendars: nil)
-        return store.events(matching: predicate)
+        let predicate = store().predicateForEvents(withStart: from, end: to, calendars: nil)
+        return store().events(matching: predicate)
             .map(Self.snapshot(from:))
             .sorted { $0.startDate < $1.startDate }
     }
@@ -63,7 +85,7 @@ actor EventKitCalendarService: CalendarServicing {
     func createEvent(_ draft: CalendarEventDraft) async throws -> CalendarEventSnapshot {
         try await requireWriteAccess(to: .event, permission: .calendar)
 
-        guard let calendar = store.defaultCalendarForNewEvents else {
+        guard let calendar = store().defaultCalendarForNewEvents else {
             // Reachable in practice: a device with every calendar disabled, or reminders-only access.
             throw AuraError.toolFailed(
                 toolName: "create_calendar_event",
@@ -71,7 +93,7 @@ actor EventKitCalendarService: CalendarServicing {
             )
         }
 
-        let event = EKEvent(eventStore: store)
+        let event = EKEvent(eventStore: store())
         event.calendar = calendar
         event.title = draft.title
         event.startDate = draft.startDate
@@ -84,7 +106,7 @@ actor EventKitCalendarService: CalendarServicing {
         do {
             // `.thisEvent` because nothing here creates a recurring event, so there is no series for the
             // span to mean anything else about.
-            try store.save(event, span: .thisEvent, commit: true)
+            try store().save(event, span: .thisEvent, commit: true)
         } catch {
             throw AuraError.toolFailed(
                 toolName: "create_calendar_event",
@@ -110,7 +132,7 @@ actor EventKitCalendarService: CalendarServicing {
         // Fetched with no bounds and filtered in Swift, because EventKit's predicate excludes undated
         // reminders entirely when either bound is set — and "what do I need to do?" has to be able to
         // include them.
-        let predicate = store.predicateForIncompleteReminders(
+        let predicate = store().predicateForIncompleteReminders(
             withDueDateStarting: nil,
             ending: nil,
             calendars: nil
@@ -121,7 +143,7 @@ actor EventKitCalendarService: CalendarServicing {
         let fetched: [ReminderSnapshot] = await withCheckedContinuation { continuation in
             // The return value is a cancel token, deliberately discarded: there is nothing to cancel this
             // from, and holding it would suggest otherwise.
-            _ = store.fetchReminders(matching: predicate) { reminders in
+            _ = store().fetchReminders(matching: predicate) { reminders in
                 continuation.resume(returning: (reminders ?? []).map(Self.snapshot(from:)))
             }
         }
@@ -134,14 +156,14 @@ actor EventKitCalendarService: CalendarServicing {
     func createReminder(_ draft: ReminderDraft) async throws -> ReminderSnapshot {
         try await requireWriteAccess(to: .reminder, permission: .reminders)
 
-        guard let list = store.defaultCalendarForNewReminders() else {
+        guard let list = store().defaultCalendarForNewReminders() else {
             throw AuraError.toolFailed(
                 toolName: "create_reminder",
                 reason: "there's no reminders list set up on this device to add it to"
             )
         }
 
-        let reminder = EKReminder(eventStore: store)
+        let reminder = EKReminder(eventStore: store())
         reminder.calendar = list
         reminder.title = draft.title
         reminder.notes = draft.notes
@@ -152,7 +174,7 @@ actor EventKitCalendarService: CalendarServicing {
         do {
             // No span: a reminder is not a series, which is why EventKit gives reminders their own
             // two-argument `save`.
-            try store.save(reminder, commit: true)
+            try store().save(reminder, commit: true)
         } catch {
             throw AuraError.toolFailed(toolName: "create_reminder", reason: error.localizedDescription)
         }
@@ -211,7 +233,12 @@ actor EventKitCalendarService: CalendarServicing {
     /// passing it to a `nonisolated static` function sends it out of this actor — which is the whole thing
     /// holding one store inside an actor exists to prevent.
     private func requestAccess(to entity: EKEntityType) async -> Bool {
-        await withCheckedContinuation { continuation in
+        // The one place a store is created before any read or write: iOS has no way to ask for access
+        // without one.
+        // Named distinctly from `store()` rather than shadowing it, so it is obvious that one store is
+        // being created and then used twice.
+        let eventStore = store()
+        return await withCheckedContinuation { continuation in
             // `@Sendable` because EventKit calls back on its own queue. It captures only the continuation,
             // which is what makes that safe.
             let handler: @Sendable (Bool, (any Error)?) -> Void = { granted, error in
@@ -224,9 +251,9 @@ actor EventKitCalendarService: CalendarServicing {
             }
             switch entity {
             case .event:
-                store.requestFullAccessToEvents(completion: handler)
+                eventStore.requestFullAccessToEvents(completion: handler)
             case .reminder:
-                store.requestFullAccessToReminders(completion: handler)
+                eventStore.requestFullAccessToReminders(completion: handler)
             @unknown default:
                 continuation.resume(returning: false)
             }

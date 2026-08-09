@@ -72,10 +72,24 @@ protocol ContactLookupServicing: Sendable {
 /// | `CNContact.phoneNumbers` | `[CNLabeledValue<CNPhoneNumber>]`, value has `stringValue` |
 actor SystemContactLookupService: ContactLookupServicing {
 
-    private let store: CNContactStore
+    /// Created on first use, for the same reason as `EventKitCalendarService`'s: `AppEnvironment` is
+    /// built inside `AuraApp.init()`, so anything constructed eagerly here sits on the critical path of
+    /// every launch — including the launches that never look anyone up. An actor makes lazy creation
+    /// safe, and `CNContactStore.authorizationStatus(for:)` is a type method, so a denied permission
+    /// never opens the address book at all.
+    private var lazyStore: CNContactStore?
+    private let injectedStore: CNContactStore?
 
-    init(store: CNContactStore = CNContactStore()) {
-        self.store = store
+    init(store: CNContactStore? = nil) {
+        self.injectedStore = store
+        self.lazyStore = store
+    }
+
+    private func store() -> CNContactStore {
+        if let lazyStore { return lazyStore }
+        let created = injectedStore ?? CNContactStore()
+        lazyStore = created
+        return created
     }
 
     func contacts(
@@ -99,7 +113,7 @@ actor SystemContactLookupService: ContactLookupServicing {
         let predicate = CNContact.predicateForContacts(matchingName: trimmed)
         let matched: [CNContact]
         do {
-            matched = try store.unifiedContacts(
+            matched = try store().unifiedContacts(
                 matching: predicate,
                 keysToFetch: Self.keys(includingReachableDetails: includingReachableDetails)
             )
