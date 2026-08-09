@@ -87,12 +87,20 @@ struct ToolExecutionRecord: Sendable, Equatable {
         self.wasConfirmed = wasConfirmed
     }
 
+    /// `true` when the action was proposed and the user said no.
+    ///
+    /// The only way a record can exist for something that did not run: a thrown error never produces
+    /// a record at all, so a record plus an unanswered confirmation means exactly "declined".
+    var wasDeclined: Bool { requiredConfirmation && !wasConfirmed }
+
     /// The user-visible note for the transcript.
     var activityNote: ToolActivityNote {
         ToolActivityNote(
             toolName: toolName,
             label: result.activityLabel,
-            succeeded: true,
+            // A declined proposal is not a success. Hard-coding `true` here would put a tick beside
+            // something that never happened, which is the §78 failure in its most literal form.
+            succeeded: !wasDeclined,
             outcome: result.outcomeSummary
         )
     }
