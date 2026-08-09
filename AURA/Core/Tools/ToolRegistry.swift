@@ -12,6 +12,10 @@ actor ToolRegistry {
     struct AvailabilityCriteria: Sendable, Equatable {
         /// Permissions currently usable. A tool needing anything outside this set is withheld.
         var grantedPermissions: Set<AuraPermission>
+        /// The subset of `grantedPermissions` that is only *partially* granted — write-only calendar
+        /// access, a limited address book. Usable, but not enough for a tool that sets
+        /// `requiresFullPermissionAccess`.
+        var partiallyGrantedPermissions: Set<AuraPermission>
         var isOnline: Bool
         /// Highest tier this turn may use. Lets a widget or a Shortcut run read-only tools while
         /// refusing consequential ones, since there is nobody present to confirm.
@@ -21,11 +25,13 @@ actor ToolRegistry {
 
         init(
             grantedPermissions: Set<AuraPermission> = [],
+            partiallyGrantedPermissions: Set<AuraPermission> = [],
             isOnline: Bool = true,
             maximumRiskLevel: ToolRiskLevel = .consequential,
             restrictedToIDs: Set<String>? = nil
         ) {
             self.grantedPermissions = grantedPermissions
+            self.partiallyGrantedPermissions = partiallyGrantedPermissions
             self.isOnline = isOnline
             self.maximumRiskLevel = maximumRiskLevel
             self.restrictedToIDs = restrictedToIDs
@@ -96,7 +102,11 @@ actor ToolRegistry {
             if let allowed = criteria.restrictedToIDs, !allowed.contains(tool.id) { return false }
             if tool.riskLevel > criteria.maximumRiskLevel { return false }
             if !criteria.isOnline && !tool.worksOffline { return false }
-            return tool.requiredPermissions.isSubset(of: criteria.grantedPermissions)
+            guard tool.requiredPermissions.isSubset(of: criteria.grantedPermissions) else { return false }
+            if tool.requiresFullPermissionAccess {
+                return tool.requiredPermissions.isDisjoint(with: criteria.partiallyGrantedPermissions)
+            }
+            return true
         }
     }
 
@@ -126,6 +136,13 @@ actor ToolRegistry {
             if !missing.isEmpty {
                 let names = missing.map(\.displayName).sorted().joined(separator: ", ")
                 return (tool, "Needs \(names) access.")
+            }
+            if tool.requiresFullPermissionAccess {
+                let partial = tool.requiredPermissions.intersection(criteria.partiallyGrantedPermissions)
+                if !partial.isEmpty {
+                    let names = partial.map(\.displayName).sorted().joined(separator: ", ")
+                    return (tool, "Needs full \(names) access, not just permission to add.")
+                }
             }
             return nil
         }

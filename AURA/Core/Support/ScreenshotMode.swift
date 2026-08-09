@@ -83,6 +83,10 @@ extension ScreenshotMode {
             persistence: controller,
             credentialStore: InMemoryCredentialStore(),
             permissionManager: StubPermissionManager.allowingEverything(),
+            // Seeded stubs rather than the real frameworks: a screenshot run is headless, and a system
+            // permission prompt would block it forever. The events are §2's scenario.
+            calendarService: ScreenshotMode.seededCalendar(),
+            contactLookupService: ScreenshotMode.seededContacts(),
             // A mock provider, so a screenshot never depends on whether the host has Apple
             // Intelligence. It also means the conversation screen has a real reply to show.
             languageModelProviders: [
@@ -297,6 +301,86 @@ struct ScreenshotHostView: View {
         case .activity:
             ActivityHomeView()
         }
+    }
+}
+
+// MARK: - Seeded system integrations (Phase 12)
+
+extension ScreenshotMode {
+
+    /// A calendar holding §2's scenario, so a screenshot of the schedule shows the product doing its job.
+    ///
+    /// A stub rather than the real service for a reason that is not just convenience: a headless screenshot
+    /// run cannot answer a system permission prompt, so `EventKitCalendarService` would block forever on
+    /// the first read. Dates are relative to now, so the images never go stale.
+    static func seededCalendar() -> StubCalendarService {
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+
+        func at(_ dayOffset: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            let day = calendar.date(byAdding: .day, value: dayOffset, to: today) ?? today
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
+        }
+
+        return StubCalendarService(
+            events: [
+                CalendarEventSnapshot(
+                    id: "screenshot.dentist",
+                    title: "Dentist",
+                    startDate: at(0, 14),
+                    endDate: at(0, 15),
+                    location: "Ridgeway Dental",
+                    calendarTitle: "Personal"
+                ),
+                CalendarEventSnapshot(
+                    id: "screenshot.site",
+                    title: "Site visit — Maple Street",
+                    startDate: at(1, 9),
+                    endDate: at(1, 11),
+                    calendarTitle: "Work"
+                ),
+                CalendarEventSnapshot(
+                    id: "screenshot.blake",
+                    title: "Blake's flight home",
+                    startDate: at(4, 18, 30),
+                    endDate: at(4, 21),
+                    calendarTitle: "Family"
+                )
+            ],
+            reminders: [
+                ReminderSnapshot(
+                    id: "screenshot.tuition",
+                    title: "Pay Blake's tuition",
+                    dueDate: at(2, 9),
+                    listTitle: "Reminders"
+                ),
+                ReminderSnapshot(
+                    id: "screenshot.filter",
+                    title: "Order air filter for the garage",
+                    listTitle: "Reminders"
+                )
+            ]
+        )
+    }
+
+    /// The people from §2's scenario, with no phone numbers — the screenshots should not show contact
+    /// details AURA would only fetch when asked.
+    static func seededContacts() -> StubContactLookupService {
+        StubContactLookupService(results: [
+            ContactSnapshot(
+                id: "screenshot.blake",
+                displayName: "Blake Nicol",
+                nickname: "Blake",
+                relations: ["son"]
+            ),
+            ContactSnapshot(
+                id: "screenshot.priya",
+                displayName: "Priya Raman",
+                organizationName: "Ridgeway Dental",
+                relations: ["dentist"]
+            )
+        ])
     }
 }
 

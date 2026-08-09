@@ -78,9 +78,14 @@ actor DefaultToolExecutor: ToolExecuting {
         }
 
         // 2. Permissions, reported as themselves so the UI can offer the fix rather than a generic failure.
+        //    A tool that would see nothing under a partial grant insists on the full one — see
+        //    `AssistantTool.requiresFullPermissionAccess`.
         for permission in tool.requiredPermissions {
             let status = await permissions.status(for: permission)
-            guard status.isUsable else {
+            let sufficient = tool.requiresFullPermissionAccess
+                ? status == .authorized
+                : status.isUsable
+            guard sufficient else {
                 throw AuraError.permissionDenied(permission)
             }
         }
@@ -141,9 +146,14 @@ actor DefaultToolExecutor: ToolExecuting {
     // MARK: - Availability
 
     func availableToolDefinitions() async -> [ToolDefinition] {
-        await registry.availableDefinitions(
+        let statuses = await permissions.allStatuses()
+        return await registry.availableDefinitions(
             for: ToolRegistry.AvailabilityCriteria(
-                grantedPermissions: await permissions.grantedPermissions(),
+                grantedPermissions: Set(statuses.filter { $0.value.isUsable }.keys),
+                // Read from the same snapshot as the granted set, so the two cannot describe different
+                // moments — a permission revoked between two reads would otherwise look both usable and
+                // fully granted.
+                partiallyGrantedPermissions: Set(statuses.filter { $0.value == .limited }.keys),
                 isOnline: await networkMonitor.isOnline,
                 maximumRiskLevel: maximumRiskLevel,
                 restrictedToIDs: nil

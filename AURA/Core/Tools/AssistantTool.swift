@@ -301,6 +301,15 @@ protocol AssistantTool: Sendable {
     /// `false` when the tool needs the network, so it can be withheld while offline (§54).
     var worksOffline: Bool { get }
 
+    /// `true` when a *partial* grant of `requiredPermissions` is not enough.
+    ///
+    /// EventKit is why this exists. iOS can grant write-only calendar access: AURA may add an event but
+    /// cannot see the calendar. That is genuinely usable for `create_calendar_event` and genuinely useless
+    /// for `read_calendar` — a read under it returns an empty array, indistinguishable from a clear day.
+    /// Without this flag a read tool would be offered to the model and then refused, which is exactly the
+    /// promise-then-refuse pattern §78 rules out.
+    var requiresFullPermissionAccess: Bool { get }
+
     /// Present-tense progress line shown while this runs: "Checking your calendar".
     func progressLabel(for arguments: ToolArguments) -> String
 
@@ -315,6 +324,9 @@ extension AssistantTool {
     var requiredPermissions: Set<AuraPermission> { [] }
     var alwaysRequiresConfirmation: Bool { false }
     var worksOffline: Bool { true }
+    /// Most tools are fine with whatever the user granted; only the ones that would silently see nothing
+    /// need to insist on full access.
+    var requiresFullPermissionAccess: Bool { false }
 
     var definition: ToolDefinition {
         ToolDefinition(

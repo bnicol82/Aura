@@ -52,6 +52,9 @@ final class AppEnvironment {
     let toolRegistry: ToolRegistry
     /// Exposed so the Privacy and Permissions screens can say which tools are available and why.
     let toolExecutor: any ToolExecuting
+    /// Phase 12. Held so a future screen can show the schedule directly, not only through the assistant.
+    let calendarService: any CalendarServicing
+    let contactLookupService: any ContactLookupServicing
     /// Held here rather than in a view so the prompt survives the user switching tabs mid-turn — the
     /// executor's task is suspended on it, and a lost coordinator would suspend it forever.
     let toolConfirmation: ToolConfirmationCoordinator
@@ -91,8 +94,11 @@ final class AppEnvironment {
         startupError: AuraError? = nil,
         credentialStore: (any SecureCredentialStoring)? = nil,
         permissionManager: (any PermissionManaging)? = nil,
-        /// Injectable so a test can register a stub tool. `nil` registers AURA's own tools.
+        // Injectable so a test can register a stub tool. `nil` registers AURA's own tools.
         toolRegistry: ToolRegistry? = nil,
+        // Injectable so previews and screenshots never touch the real calendar or address book.
+        calendarService: (any CalendarServicing)? = nil,
+        contactLookupService: (any ContactLookupServicing)? = nil,
         languageModelProviders: [any LanguageModelProvider]? = nil,
         networkMonitor: (any NetworkStatusProviding)? = nil,
         defaults: UserDefaults = .standard
@@ -143,12 +149,25 @@ final class AppEnvironment {
         // to be settled before the first turn. A tool appearing partway through a conversation would make
         // the model's sense of its own capabilities depend on timing.
         //
-        // These three are deliberately the first tools: they touch only AURA's own store, so they need no
-        // system permission and work offline. Everything with a permission attached is Phase 12.
+        // Registering a tool is not the same as offering it: `DefaultToolExecutor.availableToolDefinitions`
+        // withholds anything whose permission is missing, so the Phase 12 tools below are simply absent
+        // from a request until the user has granted calendar, reminders or contacts access.
+        let calendar = calendarService ?? EventKitCalendarService()
+        self.calendarService = calendar
+        let contacts = contactLookupService ?? SystemContactLookupService()
+        self.contactLookupService = contacts
+
         let registry = toolRegistry ?? ToolRegistry(tools: [
+            // Phase 10: AURA's own store, no permission, works offline.
             RememberTool(memoryStore: memoryStore),
             ForgetTool(memoryStore: memoryStore),
-            SearchMemoryTool(memoryStore: memoryStore)
+            SearchMemoryTool(memoryStore: memoryStore),
+            // Phase 12: the system. Each declares the permission it needs and is withheld without it.
+            ReadCalendarTool(calendarService: calendar),
+            CreateCalendarEventTool(calendarService: calendar),
+            ReadRemindersTool(calendarService: calendar),
+            CreateReminderTool(calendarService: calendar),
+            LookUpContactTool(contactService: contacts)
         ])
         self.toolRegistry = registry
 
@@ -318,6 +337,9 @@ extension AppEnvironment {
                 persistence: controller,
                 credentialStore: InMemoryCredentialStore(),
                 permissionManager: StubPermissionManager.allowingEverything(),
+                // Stubs, so no preview ever opens the calendar database or the address book.
+                calendarService: StubCalendarService(),
+                contactLookupService: StubContactLookupService(),
                 // A mock provider rather than the real one: previews must render identically whether or
                 // not the host has Apple Intelligence enabled.
                 languageModelProviders: [

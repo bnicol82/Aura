@@ -94,12 +94,16 @@ enum FeatureFlags {
     /// reach the calendar.
     static let tools = FeatureStage.live
 
-    /// Calendar, Reminders, Weather, Contacts, Location.
-    static let systemIntegrations = FeatureStage.pending(
-        phase: 12,
-        phaseName: "Productivity Tools",
-        note: "I can't reach your calendar, reminders or the weather yet."
-    )
+    /// Calendar, Reminders and Contacts. Live as of Phase 12.
+    ///
+    /// Deliberately not "everything in §37": weather and travel time are absent, because WeatherKit needs a
+    /// paid-programme entitlement this build does not have. Claiming them here would put a capability in the
+    /// Privacy dashboard's "works today" list that fails the moment it is used.
+    ///
+    /// What live means here is that the tools exist, are registered, and are offered the moment the user
+    /// grants access — and are withheld entirely until then, so nothing promises to read a calendar it
+    /// cannot see.
+    static let systemIntegrations = FeatureStage.live
 
     /// Siri, Shortcuts, App Intents, Action Button.
     static let appIntents = FeatureStage.pending(
