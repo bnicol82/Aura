@@ -182,6 +182,7 @@ jobs:
             echo "===== LAST 40 LINES OF THE RAW TEST LOG ====="
             tail -40 build/test-full.log || true
             echo "===== END ====="
+          fi
 
           {
             echo "## Tests"
