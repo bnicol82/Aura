@@ -476,7 +476,7 @@ actor AssistantOrchestrator: AssistantOrchestrating {
         AuraLog.orchestrator.error(
             "Tool loop hit \(AuraDefaults.maxToolIterations, privacy: .public) iterations in conversation \(conversationID.uuidString, privacy: .private)."
         )
-        throw AuraError.toolIterationLimitReached
+        throw AuraError.toolIterationLimitReached(limit: AuraDefaults.maxToolIterations)
     }
 
     // MARK: - Memory extraction
