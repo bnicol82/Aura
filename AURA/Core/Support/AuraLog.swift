@@ -31,6 +31,9 @@ enum AuraLog {
     static let voice = Logger(subsystem: subsystem, category: "voice")
     /// Permission requests and authorization state.
     static let permissions = Logger(subsystem: subsystem, category: "permissions")
+    /// The user-facing audit trail's own failures. Never the trail's contents — that is personal, and
+    /// `OSLog` is not the place for it (§51).
+    static let activity = Logger(subsystem: subsystem, category: "activity")
     /// Keychain access.
     static let security = Logger(subsystem: subsystem, category: "security")
 }

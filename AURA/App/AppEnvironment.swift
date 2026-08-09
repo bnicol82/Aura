@@ -55,6 +55,9 @@ final class AppEnvironment {
     /// Phase 12. Held so a future screen can show the schedule directly, not only through the assistant.
     let calendarService: any CalendarServicing
     let contactLookupService: any ContactLookupServicing
+    /// Phase 13. The audit trail's writer, and the one thing that can produce a complete copy of everything.
+    let activityLog: any ActivityLogging
+    let dataExporter: DefaultDataExporter
     /// Held here rather than in a view so the prompt survives the user switching tabs mid-turn — the
     /// executor's task is suspended on it, and a lost coordinator would suspend it forever.
     let toolConfirmation: ToolConfirmationCoordinator
@@ -144,6 +147,18 @@ final class AppEnvironment {
         let permissions = permissionManager ?? SystemPermissionManager()
         self.permissionManager = permissions
 
+        // Phase 13, first because the tool executor records into it: every attempt, including the ones it
+        // refuses, has to land in the audit trail.
+        let activityLog = SwiftDataActivityLog(modelContainer: persistence.container)
+        self.activityLog = activityLog
+        self.dataExporter = DefaultDataExporter(
+            assistantProfileStore: assistantProfileStore,
+            userProfileStore: userProfileStore,
+            conversationStore: conversationStore,
+            memoryStore: memoryStore,
+            activityLog: activityLog
+        )
+
         // Phase 10. The registry is built with its tools rather than filled in afterwards: `register` is
         // actor-isolated and this initialiser is synchronous, and more importantly "what can AURA do" has
         // to be settled before the first turn. A tool appearing partway through a conversation would make
@@ -178,7 +193,8 @@ final class AppEnvironment {
             registry: registry,
             permissions: permissions,
             networkMonitor: monitor,
-            confirmationRequester: confirmation
+            confirmationRequester: confirmation,
+            activityLog: activityLog
         )
         self.toolExecutor = toolExecutor
 

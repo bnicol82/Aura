@@ -112,19 +112,18 @@ enum FeatureFlags {
         note: "Siri and Shortcuts support is coming."
     )
 
-    /// Activity audit trail.
-    static let activityLog = FeatureStage.pending(
-        phase: 10,
-        phaseName: "Tool System",
-        note: "There's nothing to show yet — this fills in once I can take actions."
-    )
+    /// Activity audit trail. Live as of Phase 13, which gave it a writer.
+    ///
+    /// The screen and the schema existed from Phase 1 and the tool records from Phase 10, but nothing
+    /// persisted a row until `SwiftDataActivityLog` — so the screen was honestly empty rather than broken.
+    static let activityLog = FeatureStage.live
 
-    /// Exporting stored data.
-    static let dataExport = FeatureStage.pending(
-        phase: 13,
-        phaseName: "Privacy & Hardening",
-        note: "Export isn't built yet."
-    )
+    /// Exporting stored data. Live as of Phase 13.
+    ///
+    /// Complete or nothing: `DefaultDataExporter` verifies its own counts against the stores and refuses to
+    /// write a file rather than produce one that silently omits something. A partial export the user keeps
+    /// is worse than no export, because they would find out only after deleting the app.
+    static let dataExport = FeatureStage.live
 
     // MARK: - The whole set
 

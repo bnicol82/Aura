@@ -166,6 +166,30 @@ extension ScreenshotMode {
                 )
             }
 
+            // Phase 13. Seeded so the Activity screen shows what an audit trail actually looks like —
+            // including a refusal and a failure, because a screenshot of nothing but ticks would
+            // misrepresent the one screen whose job is to show what went wrong too (§36).
+            await environment.activityLog.record(
+                kind: .memorySaved, title: "Remembered", detail: "Holding the garage until October"
+            )
+            await environment.activityLog.record(
+                kind: .toolExecuted, title: "Checked your calendar", detail: "3 events"
+            )
+            await environment.activityLog.record(
+                kind: .toolExecuted,
+                title: "Set a reminder",
+                detail: "Pay Blake's tuition",
+                succeeded: true,
+                references: .none
+            )
+            await environment.activityLog.record(
+                kind: .memoryDeleted,
+                title: "Forgetting that",
+                detail: "You said no",
+                succeeded: false,
+                references: .none
+            )
+
             await environment.load()
             // Picks up the seeded conversation, so the transcript is populated on screen.
             await environment.conversation.prepare()

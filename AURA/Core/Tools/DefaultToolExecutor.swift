@@ -25,6 +25,10 @@ actor DefaultToolExecutor: ToolExecuting {
     private let networkMonitor: any NetworkStatusProviding
     private let confirmationRequester: any ToolConfirmationRequesting
 
+    /// Where every attempt is recorded (§36). Optional so a test can run the gates without a store, but
+    /// absent in the app would mean an Activity screen that stays empty while AURA acts.
+    private let activityLog: (any ActivityLogging)?
+
     /// Ceiling on what may run without the user having asked for it in so many words.
     ///
     /// Not a constant: §34's tiers are the policy, but a future setting ("never take consequential actions")
@@ -36,12 +40,14 @@ actor DefaultToolExecutor: ToolExecuting {
         permissions: any PermissionManaging,
         networkMonitor: any NetworkStatusProviding,
         confirmationRequester: any ToolConfirmationRequesting = DecliningConfirmationRequester(),
+        activityLog: (any ActivityLogging)? = nil,
         maximumRiskLevel: ToolRiskLevel = .consequential
     ) {
         self.registry = registry
         self.permissions = permissions
         self.networkMonitor = networkMonitor
         self.confirmationRequester = confirmationRequester
+        self.activityLog = activityLog
         self.maximumRiskLevel = maximumRiskLevel
     }
 
@@ -74,7 +80,7 @@ actor DefaultToolExecutor: ToolExecuting {
         // 1. Offline. Checked before permissions because it is the cheaper question and the more common
         //    cause, and because a permission prompt for a tool that cannot run anyway is pure noise.
         if !tool.worksOffline, await !networkMonitor.isOnline {
-            throw AuraError.noInternetConnection
+            throw await refuse(tool, context: context, with: AuraError.noInternetConnection)
         }
 
         // 2. Permissions, reported as themselves so the UI can offer the fix rather than a generic failure.
@@ -86,7 +92,7 @@ actor DefaultToolExecutor: ToolExecuting {
                 ? status == .authorized
                 : status.isUsable
             guard sufficient else {
-                throw AuraError.permissionDenied(permission)
+                throw await refuse(tool, context: context, with: AuraError.permissionDenied(permission))
             }
         }
 
@@ -96,9 +102,13 @@ actor DefaultToolExecutor: ToolExecuting {
             // `toolFailed` with the reason, because no `toolNotPermitted` case exists and inventing one is
             // not this commit's business. The reason has to name the ceiling, or the user sees a bare failure
             // for something AURA declined on purpose.
-            throw AuraError.toolFailed(
-                toolName: tool.name,
-                reason: "this needs a higher level of trust than AURA is currently allowed to act on"
+            throw await refuse(
+                tool,
+                context: context,
+                with: AuraError.toolFailed(
+                    toolName: tool.name,
+                    reason: "this needs a higher level of trust than AURA is currently allowed to act on"
+                )
             )
         }
 
@@ -115,7 +125,7 @@ actor DefaultToolExecutor: ToolExecuting {
             guard wasConfirmed else {
                 // Declining is a normal outcome, not a failure. It still produces a record, so the Activity
                 // log shows what AURA proposed and that the user said no.
-                return ToolExecutionRecord(
+                let declined = ToolExecutionRecord(
                     toolID: tool.id,
                     toolName: tool.name,
                     result: ToolResult(
@@ -128,12 +138,22 @@ actor DefaultToolExecutor: ToolExecuting {
                     requiredConfirmation: true,
                     wasConfirmed: false
                 )
+                await log(declined, context: context)
+                return declined
             }
         }
 
-        let result = try await tool.execute(arguments: arguments, context: context)
+        let result: ToolResult
+        do {
+            result = try await tool.execute(arguments: arguments, context: context)
+        } catch {
+            // A tool that threw still did something as far as the user is concerned: AURA tried and could
+            // not. Recording it is what keeps the Activity screen a record of actions rather than of
+            // successes (§36).
+            throw await refuse(tool, context: context, with: error)
+        }
 
-        return ToolExecutionRecord(
+        let record = ToolExecutionRecord(
             toolID: tool.id,
             toolName: tool.name,
             result: result,
@@ -141,6 +161,39 @@ actor DefaultToolExecutor: ToolExecuting {
             requiredConfirmation: needsConfirmation,
             wasConfirmed: wasConfirmed
         )
+        await log(record, context: context)
+        return record
+    }
+
+    // MARK: - Recording
+
+    private func log(_ record: ToolExecutionRecord, context: ToolExecutionContext) async {
+        await activityLog?.recordToolExecution(
+            record,
+            conversationID: context.conversationID,
+            messageID: context.messageID,
+            iterationIndex: context.iterationIndex
+        )
+    }
+
+    /// Records a refusal and hands the error back for throwing.
+    ///
+    /// Shaped as `throw await refuse(...)` so a gate cannot log and then forget to throw, or throw and
+    /// forget to log. Every path out of `execute` other than a successful run goes through here.
+    private func refuse(
+        _ tool: any AssistantTool,
+        context: ToolExecutionContext,
+        with error: any Error
+    ) async -> any Error {
+        await activityLog?.recordToolFailure(
+            toolID: tool.id,
+            toolName: tool.name,
+            error: error,
+            conversationID: context.conversationID,
+            messageID: context.messageID,
+            iterationIndex: context.iterationIndex
+        )
+        return error
     }
 
     // MARK: - Availability

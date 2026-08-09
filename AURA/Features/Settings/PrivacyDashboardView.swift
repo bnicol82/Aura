@@ -12,6 +12,15 @@ struct PrivacyDashboardView: View {
     @State private var permissionStatuses: [AuraPermission: PermissionStatus] = [:]
     @State private var isConfirmingWipe = false
     @State private var resultMessage: String?
+    @State private var isExporting = false
+    /// Set once the file exists on disk, which is what makes the share sheet presentable.
+    @State private var exportFile: ExportedFile?
+
+    /// A written export, wrapped because `URL` is not `Identifiable` and `sheet(item:)` needs it to be.
+    private struct ExportedFile: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
 
     var body: some View {
         List {
@@ -37,6 +46,17 @@ struct PrivacyDashboardView: View {
             Text("Your profile, the people you've told me about, every memory and every conversation. This can't be undone.")
         }
         .infoAlert(message: $resultMessage)
+        // A sheet rather than an inline `ShareLink`, because the file has to exist before it can be
+        // shared and gathering it takes a moment. Offering a share button that then had nothing to share
+        // would be the wrong kind of instant.
+        .sheet(item: $exportFile) { file in
+            ExportShareSheet(url: file.url) {
+                // Removed as soon as the user is done: it is a complete copy of everything AURA knows, and
+                // leaving it in the temporary directory until iOS feels like cleaning up is not good enough.
+                Task { await environment.dataExporter.discardExport(at: file.url) }
+                exportFile = nil
+            }
+        }
     }
 
     // MARK: - Sections
@@ -136,11 +156,17 @@ struct PrivacyDashboardView: View {
                 Label("Memory settings", systemImage: "brain")
             }
             Button {
-                // Phase 13.
+                exportEverything()
             } label: {
-                Label("Export my data", systemImage: "square.and.arrow.up")
+                HStack {
+                    Label("Export my data", systemImage: "square.and.arrow.up")
+                    if isExporting {
+                        Spacer()
+                        ProgressView().controlSize(.mini)
+                    }
+                }
             }
-            .disabled(!FeatureFlags.dataExport.isLive)
+            .disabled(!FeatureFlags.dataExport.isLive || isExporting)
 
             Button("Delete all my data", role: .destructive) {
                 isConfirmingWipe = true
@@ -172,15 +198,45 @@ struct PrivacyDashboardView: View {
             : "Off"
     }
 
+    private func exportEverything() {
+        isExporting = true
+        Task {
+            do {
+                let url = try await environment.dataExporter.writeExport(at: Date())
+                exportFile = ExportedFile(url: url)
+            } catch {
+                // The exporter refuses to write a partial file, so a failure here means the user got
+                // nothing rather than something incomplete — and the message says which.
+                resultMessage = error.auraDescription
+            }
+            isExporting = false
+        }
+    }
+
+    /// Deletes everything AURA holds.
+    ///
+    /// Every store, not just the profile. This used to delete the profile and the credentials only, while
+    /// the dialog promised "every memory and every conversation" — so the memories and the transcripts
+    /// survived a wipe the user had been told was total. That is the §78 failure in the place it matters
+    /// most, and it is why each store is listed here explicitly rather than left to a helper that could
+    /// fall out of step with the promise.
     private func wipeEverything() {
         Task {
             do {
+                try await environment.memoryStore.deleteAllMemories()
+                try await environment.conversationStore.deleteAllConversations()
+                try await environment.activityLog.deleteAllActivity()
                 try await environment.userProfileStore.deleteAllProfileData()
                 try environment.credentialStore.deleteAll()
                 await environment.refreshUserProfile()
                 resultMessage = "Everything's gone. I don't know anything about you."
             } catch {
-                resultMessage = error.auraDescription
+                // Deliberately not "everything's gone": a wipe that failed halfway has deleted some of it,
+                // and saying it succeeded would leave the user believing data is gone when it is not.
+                resultMessage = """
+                    Some of it couldn't be deleted, so I've stopped rather than tell you it's all gone. \
+                    (\(error.auraDescription))
+                    """
             }
         }
     }
@@ -235,4 +291,52 @@ private struct PrivacyStatusRow: View {
         PrivacyDashboardView()
     }
     .environment(AppEnvironment.preview())
+}
+
+
+/// The share sheet for a written export.
+///
+/// A small view of its own so the dismissal path is one place: whether the user shares the file or cancels,
+/// `onFinish` runs and the temporary copy is removed.
+@MainActor
+private struct ExportShareSheet: View {
+    let url: URL
+    let onFinish: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Image(systemName: "doc.badge.arrow.up")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.tint)
+                Text("Your data is ready")
+                    .font(.headline)
+                Text(
+                    """
+                    Everything AURA has stored about you, as one JSON file. It was assembled on this device                     and nothing was sent anywhere to produce it — but once you share it, it is wherever you                     put it.
+                    """
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+                ShareLink(item: url) {
+                    Label("Share the file", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Text(url.lastPathComponent)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(28)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { onFinish() }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
 }
