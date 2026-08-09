@@ -86,12 +86,13 @@ enum FeatureFlags {
         note: "Everything stays on this iPhone for now. iCloud sync is coming."
     )
 
-    /// Tool execution.
-    static let tools = FeatureStage.pending(
-        phase: 10,
-        phaseName: "Tool System",
-        note: "I can't take actions yet — no reminders, calendar entries or app launching."
-    )
+    /// Tool execution. Live as of Phase 10.
+    ///
+    /// The framework is real and so are the first three tools — remembering, forgetting and searching what
+    /// AURA knows — because those touch only its own store. Tools that need a system permission are a
+    /// separate flag (`systemIntegrations`) and a later phase, so this being live does not imply AURA can
+    /// reach the calendar.
+    static let tools = FeatureStage.live
 
     /// Calendar, Reminders, Weather, Contacts, Location.
     static let systemIntegrations = FeatureStage.pending(

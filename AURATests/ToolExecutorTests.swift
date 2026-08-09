@@ -216,6 +216,46 @@ struct ToolExecutorTests {
         #expect(!declined)
     }
 
+    // MARK: What gets offered
+
+    @Test("A tool whose permission is missing is not offered to the model")
+    func withholdsToolsMissingPermissions() async throws {
+        // Offering a tool that would then be refused invites the model to promise the user something AURA
+        // cannot deliver (§78). Withholding it is the honest version of the same restriction.
+        let allowed = StubTool(id: "stub.free", name: "free_tool", riskLevel: .readOnly)
+        let blocked = StubTool(
+            id: "stub.calendar",
+            name: "calendar_tool",
+            riskLevel: .readOnly,
+            requiredPermissions: [.calendar]
+        )
+        let executor = await Self.makeExecutor(tools: [allowed, blocked], granted: [])
+
+        #expect(await executor.availableToolDefinitions().map(\.name) == ["free_tool"])
+    }
+
+    @Test("A network tool is not offered while offline")
+    func withholdsNetworkToolsOffline() async throws {
+        let tool = StubTool(riskLevel: .readOnly, worksOffline: false)
+        let offline = await Self.makeExecutor(tools: [tool], isOnline: false)
+        #expect(await offline.availableToolDefinitions().isEmpty)
+
+        let online = await Self.makeExecutor(tools: [tool], isOnline: true)
+        #expect(await online.availableToolDefinitions().count == 1)
+    }
+
+    @Test("A tool above the risk ceiling is not offered")
+    func withholdsToolsAboveTheCeiling() async throws {
+        // The same ceiling the gate enforces, applied one step earlier. Two places computing this would
+        // eventually disagree, which is why availability is asked of the executor and not the registry.
+        let tool = StubTool(riskLevel: .consequential)
+        let capped = await Self.makeExecutor(tools: [tool], maximumRiskLevel: .reversible)
+        #expect(await capped.availableToolDefinitions().isEmpty)
+
+        let uncapped = await Self.makeExecutor(tools: [tool], maximumRiskLevel: .consequential)
+        #expect(await uncapped.availableToolDefinitions().count == 1)
+    }
+
     // MARK: Provider-managed calls
 
     @Test("A model-initiated call is not treated as user-requested")
@@ -249,8 +289,8 @@ private actor CallCounter {
 
 /// A tool that records whether it ran.
 private struct StubTool: AssistantTool {
-    let id = "stub.tool"
-    let name = "stub_tool"
+    let id: String
+    let name: String
     var description: String { "A tool for tests." }
     var parameters: ToolParameterSchema { .none }
     let requiredPermissions: Set<AuraPermission>
@@ -263,11 +303,15 @@ private struct StubTool: AssistantTool {
     let runs = CallCounter()
 
     init(
+        id: String = "stub.tool",
+        name: String = "stub_tool",
         riskLevel: ToolRiskLevel,
         requiredPermissions: Set<AuraPermission> = [],
         alwaysRequiresConfirmation: Bool = false,
         worksOffline: Bool = true
     ) {
+        self.id = id
+        self.name = name
         self.riskLevel = riskLevel
         self.requiredPermissions = requiredPermissions
         self.alwaysRequiresConfirmation = alwaysRequiresConfirmation

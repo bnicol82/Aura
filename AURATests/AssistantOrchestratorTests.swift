@@ -21,17 +21,28 @@ struct AssistantOrchestratorTests {
         let provider: MockLanguageModelProvider
         let orchestrator: AssistantOrchestrator
 
+        /// `nil` unless a test is exercising tools, so every existing turn test still runs the
+        /// pre-Phase-10 path with no tools offered.
+        let toolExecutor: DefaultToolExecutor?
+
         init(
             behavior: MockLanguageModelProvider.Behavior = .respond("Got it."),
             availability: ModelAvailability = .available,
-            isOnline: Bool = true
+            isOnline: Bool = true,
+            toolExecutionStyle: ToolExecutionStyle = .orchestratorManaged,
+            tools: [any AssistantTool] = [],
+            confirmationRequester: (any ToolConfirmationRequesting)? = nil
         ) throws {
             controller = try PersistenceController.inMemory()
             assistantProfileStore = AssistantProfileStore(modelContainer: controller.container)
             userProfileStore = UserProfileStore(modelContainer: controller.container)
             conversationStore = SwiftDataConversationStore(modelContainer: controller.container)
 
-            provider = MockLanguageModelProvider(availability: availability, behavior: behavior)
+            provider = MockLanguageModelProvider(
+                toolExecutionStyle: toolExecutionStyle,
+                availability: availability,
+                behavior: behavior
+            )
 
             let monitor = StubNetworkMonitor(isOnline: isOnline)
             let personalization = DefaultPersonalizationEngine(
@@ -43,12 +54,26 @@ struct AssistantOrchestratorTests {
                 networkMonitor: monitor,
                 availabilityCacheLifetime: 0
             )
+
+            let executor: DefaultToolExecutor? = tools.isEmpty
+                ? nil
+                : DefaultToolExecutor(
+                    registry: ToolRegistry(tools: tools),
+                    permissions: StubPermissionManager.allowingEverything(),
+                    networkMonitor: monitor,
+                    // Approving by default: these tests are about the loop, and the gates have their own
+                    // suite. A test that cares passes a declining requester explicitly.
+                    confirmationRequester: confirmationRequester ?? ApprovingConfirmationRequester()
+                )
+            toolExecutor = executor
+
             orchestrator = AssistantOrchestrator(
                 conversationStore: conversationStore,
                 personalizationEngine: personalization,
                 router: router,
                 assistantProfileStore: assistantProfileStore,
-                networkMonitor: monitor
+                networkMonitor: monitor,
+                toolExecutor: executor
             )
         }
     }
@@ -577,5 +602,209 @@ struct AssistantOrchestratorTests {
         #expect(messages.last?.role == .user)
         // The trailing user turn is not duplicated, even though it is already in the stored history.
         #expect(messages.filter { $0.text == "latest" }.count == 1)
+    }
+}
+
+// MARK: - Tool calls (Phase 10)
+
+extension AssistantOrchestratorTests {
+
+    @Test("An orchestrator-managed tool call runs, and its result grounds the answer")
+    func runsAToolAndAnswersFromIt() async throws {
+        // The whole point of the loop: the model asks, AURA runs the tool, the model gets the real result
+        // back, and only then answers. Without the middle step the answer would be invented (§78).
+        let tool = RecordingTool(riskLevel: .readOnly)
+        let harness = try Harness(
+            behavior: .requestTool(
+                name: tool.name,
+                arguments: ["query": .string("garage")],
+                thenRespond: "You're holding the garage until October."
+            ),
+            toolExecutionStyle: .orchestratorManaged,
+            tools: [tool]
+        )
+
+        let response = await harness.orchestrator.send(AssistantRequest(text: "What about the garage?"))
+
+        #expect(!response.isFailure)
+        #expect(response.text == "You're holding the garage until October.")
+        #expect(await tool.runs.count == 1)
+        // The arguments reached the tool intact rather than being dropped on the way.
+        #expect(await tool.lastQuery == "garage")
+
+        // The second round saw the tool's output as a `.tool` message. If it did not, the model answered
+        // without ever being told what happened.
+        let request = try #require(harness.provider.lastRequest)
+        let toolMessages = request.messages.filter { $0.role == .tool }
+        #expect(toolMessages.count == 1)
+        #expect(toolMessages.first?.toolName == tool.name)
+        #expect(toolMessages.first?.text.contains("recorded") == true)
+    }
+
+    @Test("Tool work appears in the persisted transcript, not just in the reply")
+    func toolActivityIsPersisted() async throws {
+        // §36: the user can see what AURA did. An action that left no trace in the transcript would be
+        // invisible the moment the reply scrolled away.
+        let tool = RecordingTool(riskLevel: .readOnly)
+        let harness = try Harness(
+            behavior: .requestTool(name: tool.name, arguments: [:], thenRespond: "Done looking."),
+            tools: [tool]
+        )
+
+        let response = await harness.orchestrator.send(AssistantRequest(text: "Check something"))
+
+        #expect(response.toolActivity.count == 1)
+        #expect(response.toolActivity.first?.toolName == tool.name)
+        #expect(response.toolActivity.first?.succeeded == true)
+
+        let stored = try await harness.conversationStore.messages(
+            inConversationID: response.conversationID
+        )
+        let assistantMessage = try #require(stored.last { $0.role == .assistant })
+        #expect(assistantMessage.toolActivity.count == 1)
+    }
+
+    @Test("A tool the user refused is reported as not done, and the turn still succeeds")
+    func decliningIsReportedNotFailed() async throws {
+        // A refusal is a normal outcome. The turn must still produce a reply, and what the model is told
+        // has to say the action did not happen — otherwise it will apologise for something it did, or
+        // worse, claim it did it.
+        let tool = RecordingTool(riskLevel: .consequential)
+        let harness = try Harness(
+            behavior: .requestTool(name: tool.name, arguments: [:], thenRespond: "Okay, I left it alone."),
+            tools: [tool],
+            confirmationRequester: DecliningConfirmationRequester()
+        )
+
+        let response = await harness.orchestrator.send(AssistantRequest(text: "Delete that"))
+
+        #expect(!response.isFailure)
+        #expect(await tool.runs.count == 0)
+
+        let request = try #require(harness.provider.lastRequest)
+        let toolMessage = try #require(request.messages.last { $0.role == .tool })
+        #expect(toolMessage.text.lowercased().contains("declined"))
+        // The transcript must not show a tick beside it.
+        #expect(response.toolActivity.first?.succeeded == false)
+    }
+
+    @Test("A tool that fails is reported to the model rather than failing the whole turn")
+    func toolFailureBecomesAToolResult() async throws {
+        let tool = RecordingTool(riskLevel: .readOnly, failure: AuraError.toolFailed(
+            toolName: "recording_tool", reason: "the store was unreachable"
+        ))
+        let harness = try Harness(
+            behavior: .requestTool(name: tool.name, arguments: [:], thenRespond: "I couldn't check that."),
+            tools: [tool]
+        )
+
+        let response = await harness.orchestrator.send(AssistantRequest(text: "Check something"))
+
+        #expect(!response.isFailure)
+        let request = try #require(harness.provider.lastRequest)
+        let toolMessage = try #require(request.messages.last { $0.role == .tool })
+        #expect(toolMessage.text.contains("did not run"))
+        #expect(response.toolActivity.first?.succeeded == false)
+    }
+
+    @Test("A model asking for a tool that does not exist is told so")
+    func unknownToolIsReported() async throws {
+        let tool = RecordingTool(riskLevel: .readOnly)
+        let harness = try Harness(
+            behavior: .requestTool(
+                name: "send_telegram", arguments: [:], thenRespond: "I can't do that one."
+            ),
+            tools: [tool]
+        )
+
+        let response = await harness.orchestrator.send(AssistantRequest(text: "Send a telegram"))
+
+        #expect(!response.isFailure)
+        let request = try #require(harness.provider.lastRequest)
+        let toolMessage = try #require(request.messages.last { $0.role == .tool })
+        #expect(toolMessage.text.contains("did not run"))
+        #expect(await tool.runs.count == 0)
+    }
+
+    @Test("With no executor, a requested tool call fails the turn rather than being ignored")
+    func noExecutorFailsRatherThanIgnoring() async throws {
+        // Ignoring the request would leave the model's ask unanswered and its next reply free to claim the
+        // action happened. `tools: []` means the harness builds no executor at all.
+        let harness = try Harness(
+            behavior: .requestTool(name: "anything", arguments: [:], thenRespond: "Done!"),
+            tools: []
+        )
+
+        let response = await harness.orchestrator.send(AssistantRequest(text: "Do the thing"))
+        #expect(response.isFailure)
+    }
+
+    @Test("Only the tools that could actually run are offered")
+    func offersOnlyAvailableTools() async throws {
+        let usable = RecordingTool(riskLevel: .readOnly)
+        let harness = try Harness(tools: [usable])
+
+        _ = await harness.orchestrator.send(AssistantRequest(text: "Hello"))
+
+        let request = try #require(harness.provider.lastRequest)
+        #expect(request.tools.map(\.name) == [usable.name])
+    }
+}
+
+// MARK: - Doubles
+
+/// Approves everything. The counterpart to `DecliningConfirmationRequester`, for tests about the loop
+/// rather than about the gate.
+private struct ApprovingConfirmationRequester: ToolConfirmationRequesting {
+    func requestConfirmation(toolName: String, prompt: String, riskLevel: ToolRiskLevel) async -> Bool {
+        true
+    }
+}
+
+/// Counts runs and remembers the last arguments, across isolation domains.
+private actor ToolCallLog {
+    private(set) var count = 0
+    private(set) var lastQuery: String?
+
+    func record(query: String?) {
+        count += 1
+        lastQuery = query
+    }
+}
+
+/// A tool that records what it was asked to do, and optionally fails.
+private struct RecordingTool: AssistantTool {
+    let id = "test.recording"
+    let name = "recording_tool"
+    var description: String { "Records that it ran." }
+    var parameters: ToolParameterSchema {
+        ToolParameterSchema([
+            ToolParameter(name: "query", description: "Anything.", type: .string, isRequired: false)
+        ])
+    }
+    let riskLevel: ToolRiskLevel
+    /// `AuraError` rather than `any Error`: a `Sendable` struct cannot store a non-`Sendable` existential,
+    /// and `AssistantTool` requires `Sendable`.
+    let failure: AuraError?
+
+    let log = ToolCallLog()
+
+    init(riskLevel: ToolRiskLevel, failure: AuraError? = nil) {
+        self.riskLevel = riskLevel
+        self.failure = failure
+    }
+
+    var runs: ToolCallLog { log }
+    var lastQuery: String? { get async { await log.lastQuery } }
+
+    func execute(arguments: ToolArguments, context: ToolExecutionContext) async throws -> ToolResult {
+        if let failure { throw failure }
+        await log.record(query: arguments.optionalString("query"))
+        return ToolResult(
+            modelFacingText: "The tool recorded the call.",
+            activityLabel: "Recording",
+            outcomeSummary: "Recorded",
+            didMutateData: false
+        )
     }
 }

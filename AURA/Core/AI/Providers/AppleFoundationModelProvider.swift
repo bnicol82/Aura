@@ -19,10 +19,17 @@ import Foundation
 /// it, and the prompt contains only the turn actually being taken. The store stays the single source of
 /// truth — the transcript is derived from it on every request rather than accumulated alongside it.
 ///
-/// ### What this provider does not do yet
-/// - **Tools.** Declares `.providerManaged` because Apple's framework is the thing that calls
-///   `Tool.call`, but no tools are passed yet. Wiring them needs a `DynamicGenerationSchema` bridge
-///   from `ToolParameterSchema`, which is Phase 10.
+/// ### Tools
+/// Wired as of Phase 10. `.providerManaged` because Apple's framework calls `Tool.call` itself, from
+/// inside `respond`/`streamResponse`, without returning control. `FoundationModelToolBridge` builds the
+/// adapters and the `DynamicGenerationSchema` for each tool's declared parameters; because the framework
+/// runs them out of reach, the adapters hold a `ToolInvoking` handle rather than the tools themselves, so
+/// every model-initiated call still passes through `DefaultToolExecutor`'s gates.
+///
+/// Activity notes are collected rather than yielded, for the same reason: there is no way to emit an event
+/// from inside `respond`. They are drained once generation finishes and attached to the response.
+///
+/// ### What this provider does not do
 /// - **Token usage.** `LanguageModelSession.Usage` is iOS 27 only, so `ModelUsage` is `nil` here. No
 ///   loss: §67's cost controls exist for metered cloud providers, and on-device inference is free.
 ///
@@ -101,7 +108,8 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
         _ request: ModelRequest,
         toolInvoker: (any ToolInvoking)?
     ) async throws -> ModelResponse {
-        let (session, promptText) = try prepare(request)
+        let activity = ToolActivityCollector()
+        let (session, promptText) = try prepare(request, toolInvoker: toolInvoker, activity: activity)
 
         do {
             try Task.checkCancellation()
@@ -120,7 +128,10 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
                 text: text,
                 providerID: id,
                 usage: nil,
-                finishReason: .complete
+                finishReason: .complete,
+                // Drained after generation, because the framework runs tools inside `respond` and there is
+                // no earlier moment at which they are all known.
+                toolActivity: await activity.drain()
             )
         } catch is CancellationError {
             throw AuraError.cancelled
@@ -144,7 +155,12 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let (session, promptText) = try prepare(request)
+                    let activity = ToolActivityCollector()
+                    let (session, promptText) = try prepare(
+                        request,
+                        toolInvoker: toolInvoker,
+                        activity: activity
+                    )
 
                     try Task.checkCancellation()
 
@@ -179,8 +195,21 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
                         throw AuraError.emptyModelResponse
                     }
 
+                    // Yielded before `.finished` so the transcript's progress rows appear in the order the
+                    // work happened, rather than arriving attached to the terminal event only.
+                    let notes = await activity.drain()
+                    for note in notes {
+                        continuation.yield(.toolActivity(note))
+                    }
+
                     continuation.yield(.finished(
-                        ModelResponse(text: text, providerID: id, usage: nil, finishReason: .complete)
+                        ModelResponse(
+                            text: text,
+                            providerID: id,
+                            usage: nil,
+                            finishReason: .complete,
+                            toolActivity: notes
+                        )
                     ))
                     continuation.finish()
                 } catch is CancellationError {
@@ -200,18 +229,14 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
     /// One function so `send` and `stream` cannot drift apart in what they check or what they send — a
     /// streaming reply that saw different context from a non-streaming one would be a bug nobody would
     /// think to look for.
-    private func prepare(_ request: ModelRequest) throws -> (LanguageModelSession, String) {
+    private func prepare(
+        _ request: ModelRequest,
+        toolInvoker: (any ToolInvoking)?,
+        activity: ToolActivityCollector
+    ) throws -> (LanguageModelSession, String) {
         let availability = Self.mapAvailability(model.availability)
         guard availability.isAvailable else {
             throw AuraError.onDeviceModelUnavailable(availability)
-        }
-
-        if !request.effectiveTools.isEmpty {
-            // Better to say so than to silently drop the tools and let the model promise an action it
-            // was never given the means to take (§78).
-            AuraLog.model.notice(
-                "Apple provider was offered \(request.effectiveTools.count, privacy: .public) tool(s); tool support lands in Phase 10."
-            )
         }
 
         let promptText = Self.renderTurnPrompt(for: request)
@@ -219,10 +244,35 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
             throw AuraError.emptyModelResponse
         }
 
+        // Tools need somewhere for their calls to go. Offered without an invoker they would be a promise
+        // AURA cannot keep, so they are dropped and the reason is logged rather than left to be
+        // discovered as a model apologising for a tool that never ran (§78).
+        let tools: [any Tool]
+        if request.effectiveTools.isEmpty {
+            tools = []
+        } else if let toolInvoker {
+            tools = FoundationModelToolBridge.adapters(
+                for: request.effectiveTools,
+                invoker: toolInvoker,
+                activity: activity
+            )
+        } else {
+            AuraLog.model.error(
+                """
+                Withholding \(request.effectiveTools.count, privacy: .public) tool(s): the request offered \
+                them with no invoker to run them.
+                """
+            )
+            tools = []
+        }
+
         let session = LanguageModelSession(
             model: model,
-            tools: [],
-            transcript: Self.makeTranscript(for: request)
+            tools: tools,
+            // The tools are declared in the transcript's instructions as well as handed to the session.
+            // Instructions ride in the transcript here rather than through `init(instructions:)`, so
+            // leaving `toolDefinitions` empty would hand the model callable tools it was never told about.
+            transcript: Self.makeTranscript(for: request, tools: tools)
         )
         return (session, promptText)
     }
@@ -332,17 +382,20 @@ struct AppleFoundationModelProvider: LanguageModelProvider {
     ///
     /// `static` and pure so what the model actually receives is assertable in a test. The transcript is
     /// the contract with the model just as much as the prompt is.
-    static func makeTranscript(for request: ModelRequest) -> Transcript {
+    static func makeTranscript(for request: ModelRequest, tools: [any Tool] = []) -> Transcript {
         var entries: [Transcript.Entry] = []
 
         // Instructions ride in the transcript because `init(model:tools:transcript:)` takes no
         // `instructions` parameter — the transcript is the only way in.
         let instructions = request.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !instructions.isEmpty {
+        // Emitted when there are tools even with no instructions text, because `toolDefinitions` lives on
+        // the instructions entry and has nowhere else to go. Skipping the entry would hand the session
+        // callable tools the model was never told it had.
+        if !instructions.isEmpty || !tools.isEmpty {
             entries.append(.instructions(Transcript.Instructions(
                 id: UUID().uuidString,
-                segments: [textSegment(instructions)],
-                toolDefinitions: []
+                segments: instructions.isEmpty ? [] : [textSegment(instructions)],
+                toolDefinitions: tools.map { Transcript.ToolDefinition(tool: $0) }
             )))
         }
 

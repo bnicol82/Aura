@@ -11,10 +11,13 @@ import Foundation
 /// happened instead of a request that vanished; `workingMemory` filters failures out so the model never
 /// treats an error as its own prior answer; and nothing anywhere can mistake a failure for a reply.
 ///
-/// ### What Phase 2 does not do
-/// No tools, no memory extraction, no real token streaming. Those are Phases 10, 7 and 3, and the
-/// events for them already exist in `AssistantTurnEvent` — the pipeline gains steps rather than
-/// changing shape.
+/// ### Two tool paths, one gate
+/// Apple's model runs tools itself, inside `LanguageModelSession`, so its answers arrive already
+/// grounded and `generateAnsweringToolCalls` returns after a single pass. Cloud providers hand a call
+/// back and wait, so the same function loops: run the calls, append their results as `.tool` messages,
+/// generate again, up to `AuraDefaults.maxToolIterations`. Both paths go through the same
+/// `ToolExecuting`, which is what keeps §34's confirmation and permission gates from depending on which
+/// provider happened to answer.
 actor AssistantOrchestrator: AssistantOrchestrating {
 
     private let conversationStore: any ConversationStoring
@@ -28,6 +31,10 @@ actor AssistantOrchestrator: AssistantOrchestrating {
     private let memoryExtractor: (any MemoryExtracting)?
     private let memoryConsolidator: (any MemoryConsolidating)?
     private let userProfileStore: (any UserProfileStoring)?
+
+    /// Phase 10. Optional for the same reason: absent, no tools are offered and a turn is pure
+    /// conversation, which is exactly the behaviour every phase before this one had.
+    private let toolExecutor: (any ToolExecuting)?
 
     /// How long a conversation stays resumable before a new request starts a fresh one.
     private let conversationStaleInterval: TimeInterval
@@ -44,6 +51,7 @@ actor AssistantOrchestrator: AssistantOrchestrating {
         memoryExtractor: (any MemoryExtracting)? = nil,
         memoryConsolidator: (any MemoryConsolidating)? = nil,
         userProfileStore: (any UserProfileStoring)? = nil,
+        toolExecutor: (any ToolExecuting)? = nil,
         conversationStaleInterval: TimeInterval = 60 * 60 * 6
     ) {
         self.conversationStore = conversationStore
@@ -54,6 +62,7 @@ actor AssistantOrchestrator: AssistantOrchestrating {
         self.memoryExtractor = memoryExtractor
         self.memoryConsolidator = memoryConsolidator
         self.userProfileStore = userProfileStore
+        self.toolExecutor = toolExecutor
         self.conversationStaleInterval = conversationStaleInterval
     }
 
@@ -213,13 +222,19 @@ actor AssistantOrchestrator: AssistantOrchestrating {
             try Task.checkCancellation()
 
             // 4. Routing.
+            //
+            // Which tools could run is asked *before* routing, because whether the turn needs tool
+            // support is part of choosing a provider. Empty when there is no executor, which is the
+            // pre-Phase-10 behaviour.
+            let toolDefinitions = await toolExecutor?.availableToolDefinitions() ?? []
+
             let isOnline = await networkMonitor.isOnline
             let (provider, route) = try await router.route(
                 purpose: .conversation,
                 context: RoutingContext(
                     aiMode: assistantProfile.aiMode,
                     isOnline: isOnline,
-                    requiresToolSupport: false
+                    requiresToolSupport: !toolDefinitions.isEmpty
                 )
             )
             emit(.routed(route))
@@ -235,7 +250,7 @@ actor AssistantOrchestrator: AssistantOrchestrating {
                 conversationSummary: try await conversationStore
                     .conversation(id: conversationID)?.summary,
                 messages: Self.modelMessages(history: history, latestUserText: text),
-                tools: [],
+                tools: toolDefinitions,
                 options: .conversation,
                 purpose: .conversation
             )
@@ -245,9 +260,11 @@ actor AssistantOrchestrator: AssistantOrchestrating {
             // Streamed rather than awaited whole, so the reply appears as it is generated. A provider
             // with no native streaming inherits a default that emits one delta, so this path is correct
             // for every provider — the orchestrator does not branch on whether streaming is real.
-            let modelResponse = try await generate(
+            let modelResponse = try await generateAnsweringToolCalls(
                 modelRequest,
                 using: provider,
+                conversationID: conversationID,
+                now: request.now,
                 emit: emit
             )
 
@@ -329,8 +346,9 @@ actor AssistantOrchestrator: AssistantOrchestrating {
         emit: @Sendable (AssistantTurnEvent) -> Void
     ) async throws -> ModelResponse {
         var finished: ModelResponse?
+        var requestedCalls: [ModelToolCall] = []
 
-        for try await event in provider.stream(modelRequest, toolInvoker: nil) {
+        for try await event in provider.stream(modelRequest, toolInvoker: toolExecutor) {
             try Task.checkCancellation()
 
             switch event {
@@ -340,19 +358,125 @@ actor AssistantOrchestrator: AssistantOrchestrating {
                 emit(.textReplaced(whole))
             case .toolActivity(let note):
                 emit(.toolFinished(note))
-            case .toolCallRequested:
-                // Only `orchestratorManaged` providers request calls, and no tools are offered yet, so
-                // reaching here means a provider changed behaviour. Phase 10 gives this a real branch.
-                AuraLog.orchestrator.notice("A provider requested a tool call before tool support exists; ignoring it.")
+            case .toolCallRequested(let call):
+                // Collected rather than run here: a stream is not the place to await a confirmation
+                // prompt, and the calls are answered together once the provider has finished asking.
+                requestedCalls.append(call)
             case .finished(let response):
                 finished = response
             }
         }
 
-        guard let finished else {
+        guard var finished else {
             throw AuraError.emptyModelResponse
         }
+
+        // Streamed `.toolCallRequested` events and `ModelResponse.toolCalls` are two renderings of the
+        // same thing, and a provider may use either. Union rather than trusting one, deduplicated by id
+        // so a provider that reports both does not get its tools run twice.
+        if !requestedCalls.isEmpty {
+            var byID: [String: ModelToolCall] = [:]
+            for call in finished.toolCalls + requestedCalls { byID[call.id] = call }
+            finished.toolCalls = byID.values.sorted { $0.id < $1.id }
+        }
         return finished
+    }
+
+    /// Runs generation to a final answer, executing any tool calls the provider asks for in between.
+    ///
+    /// Only `orchestratorManaged` providers reach the loop body. Apple's model runs its own tools inside
+    /// `LanguageModelSession`, so its answers arrive already grounded and this returns after one pass —
+    /// the loop exists for cloud providers, which hand back a call and wait.
+    ///
+    /// ### Why the iteration cap is a hard error
+    /// A model can ask for a tool, read the result, and ask again indefinitely. §36 caps it at
+    /// `maxToolIterations`, and hitting the cap is reported as a failure rather than answered with
+    /// whatever text the last round produced: a reply assembled halfway through an unfinished plan would
+    /// describe actions that were still pending as though they were done.
+    private func generateAnsweringToolCalls(
+        _ modelRequest: ModelRequest,
+        using provider: any LanguageModelProvider,
+        conversationID: UUID,
+        now: Date,
+        emit: @Sendable (AssistantTurnEvent) -> Void
+    ) async throws -> ModelResponse {
+        var request = modelRequest
+        // Accumulated across rounds, because each round's response only carries its own notes and the
+        // transcript needs the whole turn's worth.
+        var activity: [ToolActivityNote] = []
+
+        for iteration in 0..<AuraDefaults.maxToolIterations {
+            let response = try await generate(request, using: provider, emit: emit)
+            activity += response.toolActivity
+
+            guard response.hasPendingToolCalls else {
+                var final = response
+                final.toolActivity = activity
+                return final
+            }
+
+            guard let toolExecutor else {
+                // A provider asked for a tool that AURA has no way to run. Reported rather than ignored:
+                // ignoring it would leave the model's request unanswered and its next reply free to claim
+                // the action happened (§78).
+                throw AuraError.toolFailed(
+                    toolName: response.toolCalls.first?.toolName ?? "unknown",
+                    reason: "tools aren't available in this build"
+                )
+            }
+
+            for call in response.toolCalls {
+                try Task.checkCancellation()
+                emit(.toolStarted(.started(toolName: call.toolName)))
+
+                let outcome: ToolInvocationOutcome
+                do {
+                    // `execute` rather than `invokeTool`, because the orchestrator knows things the
+                    // provider-facing handle cannot pass on: which conversation this is, the clock the
+                    // turn is using, and how many rounds deep the loop is. A tool reading `Date()` when
+                    // the turn was given an explicit `now` would be untestable.
+                    let record = try await toolExecutor.execute(
+                        toolNamed: call.toolName,
+                        arguments: call.arguments,
+                        context: ToolExecutionContext(
+                            conversationID: conversationID,
+                            // The model reached for this, not the user. A reversible tool therefore still
+                            // gets confirmed — see `ToolRiskLevel.requiresConfirmation`.
+                            userExplicitlyRequested: false,
+                            now: now,
+                            iterationIndex: iteration
+                        )
+                    )
+                    outcome = ToolInvocationOutcome(
+                        modelFacingText: record.result.modelFacingText,
+                        activity: record.activityNote
+                    )
+                } catch is CancellationError {
+                    throw AuraError.cancelled
+                } catch {
+                    // Fed back as a tool result rather than thrown, so the model can tell the user what
+                    // went wrong instead of the turn collapsing. Identical wording to the Apple path.
+                    outcome = ToolInvocationOutcome.failure(toolName: call.toolName, error: error)
+                }
+
+                activity.append(outcome.activity)
+                emit(.toolFinished(outcome.activity))
+
+                request.messages.append(
+                    ModelMessage(
+                        role: .tool,
+                        text: outcome.modelFacingText,
+                        toolName: call.toolName,
+                        toolCallID: call.id
+                    )
+                )
+            }
+        }
+
+        AuraLog.orchestrator.error(
+            "Tool loop hit \(AuraDefaults.maxToolIterations, privacy: .public) iterations in conversation \(conversationID.uuidString, privacy: .private)."
+        )
+        throw AuraError.toolIterationLimitReached
     }
 
     // MARK: - Memory extraction

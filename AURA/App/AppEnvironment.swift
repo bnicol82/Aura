@@ -50,6 +50,11 @@ final class AppEnvironment {
     /// Exposed so Settings can list the voices actually installed on this device.
     let speechSynthesis: any SpeechSynthesisService
     let toolRegistry: ToolRegistry
+    /// Exposed so the Privacy and Permissions screens can say which tools are available and why.
+    let toolExecutor: any ToolExecuting
+    /// Held here rather than in a view so the prompt survives the user switching tabs mid-turn — the
+    /// executor's task is suspended on it, and a lost coordinator would suspend it forever.
+    let toolConfirmation: ToolConfirmationCoordinator
 
     // MARK: Observable state
 
@@ -86,7 +91,8 @@ final class AppEnvironment {
         startupError: AuraError? = nil,
         credentialStore: (any SecureCredentialStoring)? = nil,
         permissionManager: (any PermissionManaging)? = nil,
-        toolRegistry: ToolRegistry = ToolRegistry(),
+        /// Injectable so a test can register a stub tool. `nil` registers AURA's own tools.
+        toolRegistry: ToolRegistry? = nil,
         languageModelProviders: [any LanguageModelProvider]? = nil,
         networkMonitor: (any NetworkStatusProviding)? = nil,
         defaults: UserDefaults = .standard
@@ -127,6 +133,36 @@ final class AppEnvironment {
         )
         self.modelRouter = router
 
+        // Real by default now that Phase 5 needs microphone and speech authorization. Previews and
+        // screenshots still pass a stub explicitly, so nothing headless triggers a system prompt.
+        let permissions = permissionManager ?? SystemPermissionManager()
+        self.permissionManager = permissions
+
+        // Phase 10. The registry is built with its tools rather than filled in afterwards: `register` is
+        // actor-isolated and this initialiser is synchronous, and more importantly "what can AURA do" has
+        // to be settled before the first turn. A tool appearing partway through a conversation would make
+        // the model's sense of its own capabilities depend on timing.
+        //
+        // These three are deliberately the first tools: they touch only AURA's own store, so they need no
+        // system permission and work offline. Everything with a permission attached is Phase 12.
+        let registry = toolRegistry ?? ToolRegistry(tools: [
+            RememberTool(memoryStore: memoryStore),
+            ForgetTool(memoryStore: memoryStore),
+            SearchMemoryTool(memoryStore: memoryStore)
+        ])
+        self.toolRegistry = registry
+
+        let confirmation = ToolConfirmationCoordinator()
+        self.toolConfirmation = confirmation
+
+        let toolExecutor = DefaultToolExecutor(
+            registry: registry,
+            permissions: permissions,
+            networkMonitor: monitor,
+            confirmationRequester: confirmation
+        )
+        self.toolExecutor = toolExecutor
+
         let orchestrator = AssistantOrchestrator(
             conversationStore: conversationStore,
             personalizationEngine: personalizationEngine,
@@ -138,14 +174,10 @@ final class AppEnvironment {
                 memoryStore: memoryStore,
                 userProfileStore: userProfileStore
             ),
-            userProfileStore: userProfileStore
+            userProfileStore: userProfileStore,
+            toolExecutor: toolExecutor
         )
         self.orchestrator = orchestrator
-
-        // Real by default now that Phase 5 needs microphone and speech authorization. Previews and
-        // screenshots still pass a stub explicitly, so nothing headless triggers a system prompt.
-        let permissions = permissionManager ?? SystemPermissionManager()
-        self.permissionManager = permissions
 
         let speechRecognition = SystemSpeechRecognitionService(permissions: permissions)
         let speechSynthesis = SystemSpeechSynthesisService()
@@ -161,7 +193,6 @@ final class AppEnvironment {
         )
 
         self.credentialStore = credentialStore ?? KeychainCredentialStore()
-        self.toolRegistry = toolRegistry
         self.defaults = defaults
         self.hasCompletedOnboarding = defaults.bool(forKey: Self.onboardingCompletedKey)
     }

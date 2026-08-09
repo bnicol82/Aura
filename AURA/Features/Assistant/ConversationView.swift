@@ -46,6 +46,25 @@ struct ConversationView: View {
         .sheet(isPresented: $isShowingHistory) {
             NavigationStack { ConversationHistoryView() }
         }
+        // The confirmation gate from §34, as the user experiences it. An `alert` rather than a sheet
+        // because it must be unmissable and cannot be swiped away by accident — but even so, every exit
+        // that is not "Do it" resolves to a refusal inside the coordinator.
+        .alert(
+            "Just checking",
+            isPresented: Binding(
+                get: { environment.toolConfirmation.pending != nil },
+                // A dismissal that did not come from a button is a refusal, not a no-op. Without this the
+                // executor's task would stay suspended on a continuation nobody resumes.
+                set: { if !$0 { environment.toolConfirmation.declinePending() } }
+            ),
+            presenting: environment.toolConfirmation.pending
+        ) { _ in
+            Button("Do it") { environment.toolConfirmation.answer(true) }
+            Button("No", role: .cancel) { environment.toolConfirmation.answer(false) }
+        } message: { request in
+            // The tool's own sentence, which states the concrete effect rather than naming the tool.
+            Text(request.prompt)
+        }
         .task { await controller.prepare() }
         .errorAlert(title: "That didn't work", message: Binding(
             get: { controller.errorMessage },

@@ -138,6 +138,19 @@ actor DefaultToolExecutor: ToolExecuting {
         )
     }
 
+    // MARK: - Availability
+
+    func availableToolDefinitions() async -> [ToolDefinition] {
+        await registry.availableDefinitions(
+            for: ToolRegistry.AvailabilityCriteria(
+                grantedPermissions: await permissions.grantedPermissions(),
+                isOnline: await networkMonitor.isOnline,
+                maximumRiskLevel: maximumRiskLevel,
+                restrictedToIDs: nil
+            )
+        )
+    }
+
     // MARK: - ToolInvoking
 
     /// The handle a `providerManaged` provider uses mid-generation.

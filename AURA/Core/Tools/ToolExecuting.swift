@@ -54,6 +54,68 @@ protocol ToolExecuting: Sendable, ToolInvoking {
         arguments: ToolArguments,
         context: ToolExecutionContext
     ) async throws -> ToolExecutionRecord
+
+    /// The tools that could actually run right now, for offering to a model.
+    ///
+    /// Asked of the executor rather than of `ToolRegistry` directly, because the answer depends on
+    /// exactly the state the executor already holds — granted permissions, connectivity, the risk
+    /// ceiling — and those are the same values its gates enforce. Two places computing "is this tool
+    /// available" would eventually disagree, and the failure would be a model promising something that
+    /// is then refused (§78).
+    func availableToolDefinitions() async -> [ToolDefinition]
+}
+
+extension ToolActivityNote {
+
+    /// A tool's model-facing name, rendered for a person.
+    ///
+    /// A tool's own `progressLabel(for:)` is better and is used wherever the tool itself is in hand.
+    /// This is the fallback for the two places that hold a name and nothing else: a call the orchestrator
+    /// is about to make, and a failure that happened before any tool was resolved.
+    static func humanisedName(_ toolName: String) -> String {
+        toolName.replacingOccurrences(of: "_", with: " ")
+    }
+
+    /// A note for a call that has started and not yet finished.
+    static func started(toolName: String) -> ToolActivityNote {
+        ToolActivityNote(
+            toolName: toolName,
+            label: humanisedName(toolName),
+            // Not yet. This note describes a call in flight; `succeeded` becomes meaningful on the
+            // `.toolFinished` note that supersedes it.
+            succeeded: false,
+            outcome: nil
+        )
+    }
+}
+
+extension ToolInvocationOutcome {
+
+    /// What the model is told when a tool call could not run.
+    ///
+    /// Reported as an outcome rather than thrown, so the model can explain the problem in its own voice
+    /// — "I can't get at your calendar until you allow it" beats the whole turn collapsing into an error
+    /// banner. The text is unambiguous about failure, so the model is never left able to conclude the
+    /// action happened, and the note it carries is marked unsuccessful so the transcript agrees.
+    ///
+    /// Shared by both tool paths on purpose: Apple's framework calls tools out of the orchestrator's
+    /// reach, the orchestrator runs them itself for `orchestratorManaged` providers, and a failure has to
+    /// read identically either way.
+    static func failure(toolName: String, error: any Error) -> ToolInvocationOutcome {
+        ToolInvocationOutcome(
+            // `AuraError` is a `LocalizedError`, so `localizedDescription` is already its
+            // `errorDescription` — the same sentence the UI would show, with no second wording to keep
+            // in step.
+            modelFacingText: "The \(toolName) tool did not run. Reason: \(error.localizedDescription) "
+                + "Tell the user it did not happen.",
+            activity: ToolActivityNote(
+                toolName: toolName,
+                label: ToolActivityNote.humanisedName(toolName),
+                succeeded: false,
+                outcome: error.localizedDescription
+            )
+        )
+    }
 }
 
 /// The outcome of one tool invocation, as the orchestrator sees it.
