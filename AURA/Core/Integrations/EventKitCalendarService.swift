@@ -115,16 +115,18 @@ actor EventKitCalendarService: CalendarServicing {
             ending: nil,
             calendars: nil
         )
-        let fetched = await withCheckedContinuation { continuation in
+        // Mapped to snapshots *inside* the completion handler, not after it. `[EKReminder]` is not
+        // `Sendable`, so resuming the continuation with one is a data race the compiler correctly refuses:
+        // the array would cross out of EventKit's callback queue into this actor. Only values cross.
+        let fetched: [ReminderSnapshot] = await withCheckedContinuation { continuation in
             // The return value is a cancel token, deliberately discarded: there is nothing to cancel this
             // from, and holding it would suggest otherwise.
             _ = store.fetchReminders(matching: predicate) { reminders in
-                continuation.resume(returning: reminders ?? [])
+                continuation.resume(returning: (reminders ?? []).map(Self.snapshot(from:)))
             }
         }
 
         return fetched
-            .map(Self.snapshot(from:))
             .filter { Self.qualifies($0, from: start, to: end, includeUndated: includeUndated) }
             .sorted { ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture) }
     }
@@ -188,8 +190,9 @@ actor EventKitCalendarService: CalendarServicing {
         case .fullAccess, .writeOnly:
             return
         case .notDetermined:
-            let granted = await Self.requestAccess(to: entity, in: store)
-            guard granted else { throw AuraError.permissionDenied(permission) }
+            guard await requestAccess(to: entity) else {
+                throw AuraError.permissionDenied(permission)
+            }
         case .denied, .restricted:
             throw AuraError.permissionDenied(permission)
         @unknown default:
@@ -203,9 +206,15 @@ actor EventKitCalendarService: CalendarServicing {
     /// documented API is the completion-handler form and this is the shape that is certain to exist. An
     /// error is folded into `false`: from the caller's point of view "it threw" and "they said no" both
     /// mean AURA may not proceed.
-    private static func requestAccess(to entity: EKEntityType, in store: EKEventStore) async -> Bool {
+    ///
+    /// An *instance* method rather than a static one taking the store: `EKEventStore` is not `Sendable`, so
+    /// passing it to a `nonisolated static` function sends it out of this actor — which is the whole thing
+    /// holding one store inside an actor exists to prevent.
+    private func requestAccess(to entity: EKEntityType) async -> Bool {
         await withCheckedContinuation { continuation in
-            let handler: (Bool, (any Error)?) -> Void = { granted, error in
+            // `@Sendable` because EventKit calls back on its own queue. It captures only the continuation,
+            // which is what makes that safe.
+            let handler: @Sendable (Bool, (any Error)?) -> Void = { granted, error in
                 if let error {
                     AuraLog.permissions.error(
                         "EventKit access request failed: \(error.localizedDescription, privacy: .public)"

@@ -182,7 +182,9 @@ actor SystemPermissionManager: PermissionManaging {
     private static func requestEventKit(_ entity: EKEntityType) async -> Bool {
         let store = EKEventStore()
         return await withCheckedContinuation { continuation in
-            let handler: (Bool, (any Error)?) -> Void = { granted, error in
+            // `@Sendable` because EventKit calls back on its own queue; the closure captures only the
+            // continuation.
+            let handler: @Sendable (Bool, (any Error)?) -> Void = { granted, error in
                 if let error {
                     AuraLog.permissions.error(
                         "EventKit access request failed: \(error.localizedDescription, privacy: .public)"
