@@ -117,15 +117,27 @@ capture() {
     xcrun simctl ui "$UDID" appearance "$appearance" >/dev/null 2>&1 || true
     xcrun simctl terminate "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
 
-    if ! xcrun simctl launch "$UDID" "$BUNDLE_ID" -AURAScreenshotScreen "$screen" >/dev/null 2>&1; then
+    # simctl's stderr is kept rather than discarded. "launch failed" on its own is useless — a run where
+    # ten screens failed in a row said exactly that ten times and gave no reason, which cost a cycle. The
+    # message distinguishes the cases that matter: a crash on launch, a simulator that has wedged, and an
+    # app that was never installed.
+    local launch_output
+    if ! launch_output=$(xcrun simctl launch "$UDID" "$BUNDLE_ID" -AURAScreenshotScreen "$screen" 2>&1); then
         echo "    !! launch failed for $screen"
+        printf '%s\n' "$launch_output" | sed 's/^/       /'
         return 1
     fi
 
     # The seeded store is built asynchronously on appear, so the first frame is deliberately blank.
     # Waiting is what makes the screenshot show real content.
     sleep 4
-    xcrun simctl io "$UDID" screenshot --type=png "$OUT/$filename.png" >/dev/null 2>&1
+
+    local shot_output
+    if ! shot_output=$(xcrun simctl io "$UDID" screenshot --type=png "$OUT/$filename.png" 2>&1); then
+        echo "    !! screenshot failed for $screen"
+        printf '%s\n' "$shot_output" | sed 's/^/       /'
+        return 1
+    fi
 }
 
 # Deliberately *not* deleting the existing images first. A run that captures only some of the screens
