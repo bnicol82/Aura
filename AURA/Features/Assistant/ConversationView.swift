@@ -53,9 +53,10 @@ struct ConversationView: View {
             "Just checking",
             isPresented: Binding(
                 get: { environment.toolConfirmation.pending != nil },
-                // A dismissal that did not come from a button is a refusal, not a no-op. Without this the
-                // executor's task would stay suspended on a continuation nobody resumes.
-                set: { if !$0 { environment.toolConfirmation.declinePending() } }
+                // A dismissal that did not come from a button is a refusal. `promptDismissed()` rather
+                // than `declinePending()` because SwiftUI drives this to `false` *after* a button action
+                // runs, and declining unconditionally would overwrite an approval the user just gave.
+                set: { if !$0 { environment.toolConfirmation.promptDismissed() } }
             ),
             presenting: environment.toolConfirmation.pending
         ) { _ in

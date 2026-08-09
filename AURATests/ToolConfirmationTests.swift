@@ -7,14 +7,21 @@ import Testing
 ///
 /// Tested closely because the failure this guards against is the worst one in the app: a consequential
 /// action running when nobody approved it. Every path that is not an explicit "yes" has to end in `false`,
-/// and the executor's task must never be left suspended.
+/// and — the property the first implementation lacked — every path has to *end*.
 @Suite("Tool confirmation", .timeLimit(.minutes(1)))
 @MainActor
 struct ToolConfirmationTests {
 
+    /// Short deadlines so the timeout path is testable in milliseconds rather than minutes.
+    private static func makeCoordinator(
+        timeout: Duration = .seconds(5)
+    ) -> ToolConfirmationCoordinator {
+        ToolConfirmationCoordinator(timeout: timeout, pollInterval: .milliseconds(5))
+    }
+
     @Test("Approving resolves to true and clears the prompt")
     func approving() async throws {
-        let coordinator = ToolConfirmationCoordinator()
+        let coordinator = Self.makeCoordinator()
 
         let answer = Task {
             await coordinator.requestConfirmation(
@@ -33,7 +40,7 @@ struct ToolConfirmationTests {
 
     @Test("Declining resolves to false")
     func declining() async throws {
-        let coordinator = ToolConfirmationCoordinator()
+        let coordinator = Self.makeCoordinator()
         let answer = Task {
             await coordinator.requestConfirmation(
                 toolName: "forget_this", prompt: "Forget it?", riskLevel: .consequential
@@ -48,9 +55,9 @@ struct ToolConfirmationTests {
 
     @Test("A dismissed prompt is a refusal, not a no-op")
     func dismissing() async throws {
-        // The alert's `isPresented` setter calls this. Without it the tool's task would stay suspended on
-        // a continuation nobody resumes, and the tool would never report an outcome at all.
-        let coordinator = ToolConfirmationCoordinator()
+        // The alert's `isPresented` setter calls this when the prompt leaves the screen without a button
+        // having been tapped.
+        let coordinator = Self.makeCoordinator()
         let answer = Task {
             await coordinator.requestConfirmation(
                 toolName: "forget_this", prompt: "Forget it?", riskLevel: .consequential
@@ -58,7 +65,7 @@ struct ToolConfirmationTests {
         }
 
         try await Self.waitForPending(coordinator)
-        coordinator.declinePending()
+        coordinator.promptDismissed()
         #expect(await answer.value == false)
     }
 
@@ -66,7 +73,7 @@ struct ToolConfirmationTests {
     func secondRequestDeclines() async throws {
         // Queueing has the same hazard spread over time: the user would approve one thing while a second
         // prompt was waiting behind it. Refusing the second is recoverable — they can ask again.
-        let coordinator = ToolConfirmationCoordinator()
+        let coordinator = Self.makeCoordinator()
         let first = Task {
             await coordinator.requestConfirmation(
                 toolName: "forget_this", prompt: "First?", riskLevel: .consequential
@@ -85,9 +92,41 @@ struct ToolConfirmationTests {
         #expect(await first.value)
     }
 
+    @Test("A dismissal after an approval does not overwrite it")
+    func dismissalAfterApprovalKeepsTheApproval() async throws {
+        // SwiftUI drives an alert's `isPresented` binding to `false` after a button action runs, so this
+        // sequence is the real one, not a contrived order. Declining unconditionally on dismissal would
+        // invert the user's decision a moment after they made it.
+        let coordinator = Self.makeCoordinator()
+        let answer = Task {
+            await coordinator.requestConfirmation(
+                toolName: "forget_this", prompt: "Forget it?", riskLevel: .consequential
+            )
+        }
+
+        try await Self.waitForPending(coordinator)
+        coordinator.answer(true)
+        coordinator.promptDismissed()
+
+        #expect(await answer.value)
+    }
+
+    @Test("A prompt nobody answers refuses on its own")
+    func unansweredPromptRefuses() async throws {
+        // Silence is never consent, made total: a user who put the phone down mid-prompt gets the action
+        // not happening, rather than a tool held open indefinitely.
+        let coordinator = Self.makeCoordinator(timeout: .milliseconds(150))
+        let approved = await coordinator.requestConfirmation(
+            toolName: "forget_this", prompt: "Forget it?", riskLevel: .consequential
+        )
+        #expect(approved == false)
+        // And the prompt is gone, rather than left on screen with nothing waiting behind it.
+        #expect(coordinator.pending == nil)
+    }
+
     @Test("A cancelled turn refuses instead of hanging")
     func cancellationRefuses() async throws {
-        let coordinator = ToolConfirmationCoordinator()
+        let coordinator = Self.makeCoordinator()
         let answer = Task {
             await coordinator.requestConfirmation(
                 toolName: "forget_this", prompt: "Forget it?", riskLevel: .consequential
@@ -97,18 +136,17 @@ struct ToolConfirmationTests {
         try await Self.waitForPending(coordinator)
         answer.cancel()
 
-        // `withCheckedContinuation` is not cancellation-aware, so this only passes because the coordinator
-        // handles cancellation explicitly. Without it the test would hang rather than fail, which is why
-        // the assertion is on the value and not on a flag.
+        // The wait checks `Task.isCancelled` every pass, so this returns rather than hanging. The first
+        // implementation suspended on a checked continuation, which ignores cancellation — that version hung
+        // CI twice and could not even be killed by `.timeLimit`.
         #expect(await answer.value == false)
         #expect(coordinator.pending == nil)
     }
 
     @Test("Answering when nothing is pending does nothing")
     func answeringNothingIsSafe() {
-        // Reachable from a stale button tap or a second dismissal, and resuming a nil continuation would
-        // trap rather than fail gracefully.
-        let coordinator = ToolConfirmationCoordinator()
+        // Reachable from a stale button tap or a second dismissal.
+        let coordinator = Self.makeCoordinator()
         coordinator.answer(true)
         coordinator.declinePending()
         #expect(coordinator.pending == nil)
