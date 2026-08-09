@@ -167,6 +167,18 @@ jobs:
           fi
           echo "===== END TEST REPORT ====="
 
+          # Printed on every run, pass or fail, because "the suite got slower" is invisible until it is
+          # measured — and it went from four minutes to over twenty-five before anyone noticed the cause.
+          # A near-identical duration across unrelated tests is the signature of a fixed cost rather than
+          # work, which is what identified the shared-store-name contention.
+          if [ -s build/test-full.log ]; then
+            echo "===== SLOWEST TESTS ====="
+            grep -oE 'Test .* passed after [0-9.]+ seconds' build/test-full.log \
+              | sed -E 's/^Test (.*) passed after ([0-9.]+) seconds$/\2s  \1/' \
+              | sort -rn | head -15 || true
+            echo "===== END ====="
+          fi
+
           # A hang produces no failure lines at all, so the report above is empty and says nothing about
           # why. These two sections are what make a hang diagnosable: the tests that started and never
           # finished are, by definition, the ones that were stuck.
