@@ -23,6 +23,12 @@ actor AssistantOrchestrator: AssistantOrchestrating {
     private let assistantProfileStore: any AssistantProfileStoring
     private let networkMonitor: any NetworkStatusProviding
 
+    /// Phase 7. Optional so a test or preview can run turns with no memory system at all, and so the
+    /// pipeline degrades to Phase 2 behaviour rather than failing if either is absent.
+    private let memoryExtractor: (any MemoryExtracting)?
+    private let memoryConsolidator: (any MemoryConsolidating)?
+    private let userProfileStore: (any UserProfileStoring)?
+
     /// How long a conversation stays resumable before a new request starts a fresh one.
     private let conversationStaleInterval: TimeInterval
 
@@ -35,6 +41,9 @@ actor AssistantOrchestrator: AssistantOrchestrating {
         router: any ModelRouting,
         assistantProfileStore: any AssistantProfileStoring,
         networkMonitor: any NetworkStatusProviding,
+        memoryExtractor: (any MemoryExtracting)? = nil,
+        memoryConsolidator: (any MemoryConsolidating)? = nil,
+        userProfileStore: (any UserProfileStoring)? = nil,
         conversationStaleInterval: TimeInterval = 60 * 60 * 6
     ) {
         self.conversationStore = conversationStore
@@ -42,6 +51,9 @@ actor AssistantOrchestrator: AssistantOrchestrating {
         self.router = router
         self.assistantProfileStore = assistantProfileStore
         self.networkMonitor = networkMonitor
+        self.memoryExtractor = memoryExtractor
+        self.memoryConsolidator = memoryConsolidator
+        self.userProfileStore = userProfileStore
         self.conversationStaleInterval = conversationStaleInterval
     }
 
@@ -282,6 +294,15 @@ actor AssistantOrchestrator: AssistantOrchestrating {
             // cost of doing this here rather than in a detached task is that the event stream stays open a
             // moment longer. In exchange it is sequenced and testable, instead of a race.
             await refreshRollingSummary(conversationID: conversationID)
+
+            await extractMemories(
+                conversationID: conversationID,
+                userText: text,
+                assistantText: answer,
+                assistantMessageID: assistantMessageID,
+                request: request,
+                emit: emit
+            )
         } catch {
             let auraError = error.asAuraError
             await recordFailure(
@@ -332,6 +353,71 @@ actor AssistantOrchestrator: AssistantOrchestrating {
             throw AuraError.emptyModelResponse
         }
         return finished
+    }
+
+    // MARK: - Memory extraction
+
+    /// Mines the finished turn for anything worth remembering (§20, §21).
+    ///
+    /// Runs after `.finished` for the same reason the summary does: the user has their answer, so the only
+    /// cost of doing it here rather than in a detached task is that the event stream stays open a moment
+    /// longer — and in exchange it is sequenced and testable rather than a race.
+    ///
+    /// Every failure is swallowed. Extraction is an enhancement to a turn that already succeeded, and failing
+    /// to learn something must never surface as an error about the answer the user just received.
+    private func extractMemories(
+        conversationID: UUID,
+        userText: String,
+        assistantText: String,
+        assistantMessageID: UUID,
+        request: AssistantRequest,
+        emit: @Sendable (AssistantTurnEvent) -> Void
+    ) async {
+        guard FeatureFlags.memory.isLive,
+              let memoryExtractor,
+              let memoryConsolidator else { return }
+
+        do {
+            let profile = try await assistantProfileStore.currentProfile()
+            // The user's switch, checked here rather than deeper down: with automatic memory off, nothing is
+            // even examined, so there is no candidate sitting anywhere waiting to be swept up later (§48).
+            guard profile.memory.automaticMemoryEnabled else { return }
+
+            let people = try await userProfileStore?.currentProfile().people ?? []
+            let history = try await conversationStore.workingMemory(
+                conversationID: conversationID,
+                limit: AuraDefaults.workingMemoryTurnLimit
+            )
+
+            let result = try await memoryExtractor.extract(
+                from: ExtractionRequest(
+                    userMessage: userText,
+                    assistantMessage: assistantText,
+                    conversationID: conversationID,
+                    userMessageID: assistantMessageID,
+                    recentTurns: history.suffix(4).map(\.content),
+                    knownPeople: people,
+                    now: request.now
+                )
+            )
+
+            for candidate in result.retainableCandidates {
+                // "Ask before saving" means exactly that: the candidate is surfaced for review and nothing is
+                // written. Consolidating first and asking afterwards would make the setting cosmetic.
+                if profile.memory.asksBeforeSaving {
+                    emit(.memoryCandidatePending(candidate))
+                    continue
+                }
+                let outcome = try await memoryConsolidator.consolidate(candidate)
+                if let saved = outcome.savedMemory {
+                    emit(.memorySaved(saved))
+                }
+            }
+        } catch {
+            AuraLog.memory.debug(
+                "Extraction skipped for this turn: \(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 
     // MARK: - Rolling summary

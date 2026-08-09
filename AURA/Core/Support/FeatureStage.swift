@@ -67,11 +67,8 @@ enum FeatureFlags {
     static let conversationHistory = FeatureStage.live
 
     /// Automatic and explicit memory.
-    static let memory = FeatureStage.pending(
-        phase: 7,
-        phaseName: "Memory",
-        note: "I'm not learning anything from conversations yet. You can still add and edit what I know by hand."
-    )
+    /// Automatic memory. Live as of Phase 7 — extraction, retrieval and consolidation are all wired.
+    static let memory = FeatureStage.live
 
     /// Manually curating the profile — the "What AURA Knows About You" editor.
     ///

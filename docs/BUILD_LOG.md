@@ -90,7 +90,7 @@ covers nine commits at once.
 |---|---|
 | 5 — Voice | Services, permissions and UI wiring done; `voiceInput`/`voiceOutput` live. **Never run against a microphone.** |
 | 6 — History | Complete. Browsing, archive search, rename/pin/archive/delete. |
-| 7 — Memory | **Half done.** Retention policy and store written and tested; extraction, retrieval and consolidation are not. `memory` stays pending. |
+| 7 — Memory | **Complete.** Retention policy, store, retrieval, extractor and consolidator all written and wired; `memory` is live. Never run against the real model. |
 
 ### What nine unverified commits actually cost
 

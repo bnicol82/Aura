@@ -24,6 +24,8 @@ final class AppEnvironment {
     let assistantProfileStore: AssistantProfileStore
     let userProfileStore: UserProfileStore
     let conversationStore: SwiftDataConversationStore
+    /// Exposed so the Memory screens can read and edit what AURA has learned.
+    let memoryStore: SwiftDataMemoryStore
 
     // MARK: Stateless engines
 
@@ -102,11 +104,20 @@ final class AppEnvironment {
         let monitor = networkMonitor ?? NetworkMonitor()
         self.networkMonitor = monitor
 
+        // Phase 7. The memory store is built first because retrieval, extraction and consolidation all
+        // depend on it, and they in turn are what make the assistant learn anything.
+        let memoryStore = SwiftDataMemoryStore(modelContainer: persistence.container)
+        self.memoryStore = memoryStore
+
+        let memoryRetrieval = DefaultMemoryRetrieval(
+            memoryStore: memoryStore,
+            userProfileStore: userProfileStore
+        )
+
         let personalizationEngine = DefaultPersonalizationEngine(
             assistantProfileStore: assistantProfileStore,
             userProfileStore: userProfileStore,
-            // Phase 7 injects the retrieval engine here. Until then profile keyword search carries it.
-            memoryRetrieval: nil
+            memoryRetrieval: memoryRetrieval
         )
         self.personalizationEngine = personalizationEngine
 
@@ -121,7 +132,13 @@ final class AppEnvironment {
             personalizationEngine: personalizationEngine,
             router: router,
             assistantProfileStore: assistantProfileStore,
-            networkMonitor: monitor
+            networkMonitor: monitor,
+            memoryExtractor: ModelMemoryExtractor(router: router),
+            memoryConsolidator: DefaultMemoryConsolidator(
+                memoryStore: memoryStore,
+                userProfileStore: userProfileStore
+            ),
+            userProfileStore: userProfileStore
         )
         self.orchestrator = orchestrator
 
