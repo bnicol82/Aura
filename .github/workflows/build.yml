@@ -141,6 +141,12 @@ jobs:
         # actual cause.
         if: steps.build.outcome == 'success'
         continue-on-error: true
+        # A hung test would otherwise run to the job's 60-minute cap, and GitHub does not serve the log
+        # of a *running* job — so a deadlock is invisible until an hour has passed, and then looks like
+        # a timeout rather than naming itself. A full suite takes about four minutes; twelve is generous
+        # headroom and still ends the job while the log is worth reading. This has already cost three
+        # runs.
+        timeout-minutes: 12
         run: ./Scripts/test.sh
 
       - name: Report test result
@@ -156,6 +162,26 @@ jobs:
             echo "(no failures recorded)"
           fi
           echo "===== END TEST REPORT ====="
+
+          # A hang produces no failure lines at all, so the report above is empty and says nothing about
+          # why. These two sections are what make a hang diagnosable: the tests that started and never
+          # finished are, by definition, the ones that were stuck.
+          if [ "${{ steps.test.outcome }}" != "success" ] && [ -s build/test-full.log ]; then
+            echo "===== STARTED AND NEVER FINISHED ====="
+            grep -oE 'Test .* started\.' build/test-full.log \
+              | sed -E 's/^Test (.*) started\.$/\1/' | sort -u > /tmp/started.txt || true
+            grep -oE 'Test .* (passed|failed|skipped)' build/test-full.log \
+              | sed -E 's/^Test (.*) (passed|failed|skipped)$/\1/' | sort -u > /tmp/finished.txt || true
+            if [ -s /tmp/started.txt ]; then
+              comm -23 /tmp/started.txt /tmp/finished.txt || true
+            else
+              echo "(no test-start lines — the suite never got that far)"
+            fi
+            echo "===== END ====="
+
+            echo "===== LAST 40 LINES OF THE RAW TEST LOG ====="
+            tail -40 build/test-full.log || true
+            echo "===== END ====="
 
           {
             echo "## Tests"
