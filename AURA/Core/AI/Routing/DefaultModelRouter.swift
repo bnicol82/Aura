@@ -155,7 +155,12 @@ actor DefaultModelRouter: ModelRouting {
             isOnDevice: provider.isOnDevice,
             reason: reason
         )
-        AuraLog.model.info(
+        // `.debug` rather than `.info`: this fires on every routing decision, and the memory and
+        // summarisation passes route several times per turn. At `.info` it is persisted, and in a test run
+        // it floods the log — the last CI run's test output was mostly this one line repeated thousands of
+        // times, which buried everything else. Routing is a debugging detail; the route that answered is
+        // recorded on the message itself, which is the durable record that matters.
+        AuraLog.model.debug(
             "Routed to \(provider.id.rawValue, privacy: .public), on-device: \(provider.isOnDevice, privacy: .public)"
         )
         return (provider, route)

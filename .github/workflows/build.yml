@@ -142,11 +142,15 @@ jobs:
         if: steps.build.outcome == 'success'
         continue-on-error: true
         # A hung test would otherwise run to the job's 60-minute cap, and GitHub does not serve the log
-        # of a *running* job — so a deadlock is invisible until an hour has passed, and then looks like
-        # a timeout rather than naming itself. A full suite takes about four minutes; twelve is generous
-        # headroom and still ends the job while the log is worth reading. This has already cost three
-        # runs.
-        timeout-minutes: 12
+        # of a *running* job — so a deadlock is invisible until an hour has passed, and then looks like a
+        # timeout rather than naming itself.
+        #
+        # Twelve minutes was the first guess, based on a four-minute suite. It was too tight: phases 10,
+        # 12 and 13 added about sixty tests, many of which stand up their own in-memory SwiftData
+        # container, and two runs were killed while still passing tests rather than while stuck. Raised to
+        # give a complete run room to finish and report a real total — the point of the cap is to bound a
+        # deadlock, not to police how long an honest suite takes.
+        timeout-minutes: 25
         run: ./Scripts/test.sh
 
       - name: Report test result
@@ -224,7 +228,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/screenshots docs/SCREENSHOTS.md
+          # `--ignore-removal` stages new and modified files but never deletions. Belt and braces
+          # alongside `screenshots.sh` now failing on a partial capture: between them, a run that cannot
+          # launch the app is incapable of removing screenshots from the repository. Removing a screen for
+          # real is a deliberate act and belongs in a human's commit.
+          git add --ignore-removal docs/screenshots docs/SCREENSHOTS.md
 
           if git diff --cached --quiet; then
             echo "Screens are unchanged since the last run — nothing to commit."

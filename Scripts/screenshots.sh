@@ -128,15 +128,21 @@ capture() {
     xcrun simctl io "$UDID" screenshot --type=png "$OUT/$filename.png" >/dev/null 2>&1
 }
 
-rm -f "$OUT"/*.png
+# Deliberately *not* deleting the existing images first. A run that captures only some of the screens
+# would otherwise leave the rest missing, and CI would commit those deletions — which is exactly what
+# happened: one partial run silently removed 14 of 22 screenshots from the repository. Each capture
+# overwrites its own file, so stale images are replaced rather than accumulated, and a screen that fails
+# keeps the last good picture of itself instead of vanishing.
 INDEX=0
 CAPTURED=0
+EXPECTED=0
 
 while IFS= read -r screen; do
     [ -z "$screen" ] && continue
     INDEX=$((INDEX + 1))
     NAME=$(printf "%02d-%s" "$INDEX" "$screen")
     printf "    [%02d/%s] %s\n" "$INDEX" "$SCREEN_COUNT" "$screen"
+    EXPECTED=$((EXPECTED + 1))
     if capture "$screen" "$NAME" light; then
         CAPTURED=$((CAPTURED + 1))
     fi
@@ -146,6 +152,7 @@ done <<< "$SCREENS"
 # image would make the index tedious to scroll on a phone.
 for screen in home conversation memoryHome privacy; do
     printf "    [dark] %s\n" "$screen"
+    EXPECTED=$((EXPECTED + 1))
     capture "$screen" "dark-$screen" dark && CAPTURED=$((CAPTURED + 1))
 done
 
@@ -153,7 +160,7 @@ xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
 xcrun simctl terminate "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
 
 echo
-echo "==> Captured $CAPTURED image(s) into $OUT"
+echo "==> Captured $CAPTURED of $EXPECTED image(s) into $OUT"
 
 # --- Index -----------------------------------------------------------------------------------
 
@@ -199,7 +206,12 @@ echo "==> Captured $CAPTURED image(s) into $OUT"
 
 echo "==> Wrote docs/SCREENSHOTS.md"
 
-if [ "$CAPTURED" -eq 0 ]; then
-    echo "!!! Nothing was captured."
+# Anything short of the full set is a failure, not a partial success. The old check only fired when
+# *nothing* was captured, so a run that got 8 of 22 reported success — and the caller went on to commit
+# the 14 missing files as deletions. A partial capture means the app stopped launching partway through,
+# which is a bug worth surfacing rather than quietly publishing a thinner set of screens.
+if [ "$CAPTURED" -lt "$EXPECTED" ]; then
+    echo "!!! Only $CAPTURED of $EXPECTED screens were captured — the app stopped launching partway."
+    echo "    Existing images were left in place rather than deleted."
     exit 1
 fi
