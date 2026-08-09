@@ -8,7 +8,7 @@ import Testing
 /// Backed by a real in-memory `SwiftDataMemoryStore` rather than a stub, because what is being checked is
 /// end-to-end: that "remember this" is actually retrievable afterwards, and that "forget that" leaves nothing
 /// behind. A stub would let both pass while the store did neither.
-@Suite("Memory tools")
+@Suite("Memory tools", .timeLimit(.minutes(1)))
 struct MemoryToolTests {
 
     private static func makeStore() throws -> SwiftDataMemoryStore {

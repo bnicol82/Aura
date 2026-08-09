@@ -8,7 +8,7 @@ import Testing
 /// Tested closely because the failure this guards against is the worst one in the app: a consequential
 /// action running when nobody approved it. Every path that is not an explicit "yes" has to end in `false`,
 /// and the executor's task must never be left suspended.
-@Suite("Tool confirmation")
+@Suite("Tool confirmation", .timeLimit(.minutes(1)))
 @MainActor
 struct ToolConfirmationTests {
 

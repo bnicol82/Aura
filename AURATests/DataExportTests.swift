@@ -10,7 +10,7 @@ import Testing
 /// ones a user would only discover too late: that the file is *complete*, and that it fails loudly rather
 /// than writing a partial one. Everything else here is round-tripping, which is what makes the file a
 /// contract rather than a dump.
-@Suite("Data export")
+@Suite("Data export", .timeLimit(.minutes(1)))
 struct DataExportTests {
 
     /// Real stores over an in-memory container, because completeness is a property of the stores and a stub

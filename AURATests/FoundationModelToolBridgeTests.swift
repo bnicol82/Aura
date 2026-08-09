@@ -10,7 +10,7 @@ import Testing
 /// Intelligence, which no simulator has. So these tests pin the two things that would silently break the
 /// bridge — a schema that will not build, and arguments that do not survive the round trip — and leave
 /// "the model actually calls it" to a device.
-@Suite("Foundation model tool bridge")
+@Suite("Foundation model tool bridge", .timeLimit(.minutes(1)))
 struct FoundationModelToolBridgeTests {
 
     private static func definition(

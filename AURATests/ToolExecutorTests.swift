@@ -8,7 +8,7 @@ import Testing
 /// Tested harder than most things here because the failure modes are not "wrong answer" — they are AURA taking
 /// an action the user did not authorise, or reporting one it never took. Both are unrecoverable in a way a bad
 /// sentence is not.
-@Suite("Tool executor")
+@Suite("Tool executor", .timeLimit(.minutes(1)))
 struct ToolExecutorTests {
 
     // MARK: Confirmation policy

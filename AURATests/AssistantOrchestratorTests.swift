@@ -9,7 +9,7 @@ import Testing
 /// Real stores, real personalization engine, real router — only the model is a double. That is the point
 /// of the architecture: a complete turn, including persistence and context assembly, is verifiable with
 /// no device, no Apple Intelligence, and no network.
-@Suite("Assistant orchestrator")
+@Suite("Assistant orchestrator", .timeLimit(.minutes(1)))
 struct AssistantOrchestratorTests {
 
     /// Everything a turn needs, wired the way the app wires it.

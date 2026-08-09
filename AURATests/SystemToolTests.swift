@@ -12,7 +12,7 @@ import Testing
 /// a real calendar. What is testable is everything that decides *what the user is told*: the date ranges, the
 /// wording, the honest empty cases, the permission mapping, and the privacy rule about contact details. Those
 /// are where this feature can mislead someone, and they need no device.
-@Suite("System tools")
+@Suite("System tools", .timeLimit(.minutes(1)))
 struct SystemToolTests {
 
     /// Noon on a fixed Friday, so nothing here depends on when the suite runs.
