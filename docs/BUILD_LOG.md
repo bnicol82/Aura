@@ -81,6 +81,81 @@ hardware with Apple Intelligence enabled. The first genuine conversation is stil
 
 ---
 
+## Phases 10, 12 and 13 — Action, the system, and getting your data out
+
+Three phases in one sitting, in that order. Phase 11 (App Intents) is skipped for now and Phase 9
+(CloudKit) remains deliberately unstarted.
+
+| Phase | State |
+|---|---|
+| 10 — Tools | **Complete.** Executor, gates, confirmation UI, the Apple `Tool` bridge, and three memory tools. `tools` live. |
+| 12 — System | Calendar, reminders and contacts. `systemIntegrations` live. Weather and travel time deliberately absent. |
+| 13 — Privacy | Export, the audit trail's writer, and a wipe that actually wipes. `dataExport` and `activityLog` live. |
+
+### Two real defects found in already-shipped code
+
+Neither was in the new work, and both are the same shape — something that reported success it had not
+earned.
+
+1. **`ToolExecutionRecord.activityNote` hard-coded `succeeded: true`.** A tool the user *declined* would
+   have appeared in the transcript with a tick beside it. Now derived from `wasDeclined`.
+2. **"Delete all my data" did not delete most of the data.** It cleared the profile and the Keychain
+   only, while the confirmation dialog promised "every memory and every conversation". Memories,
+   transcripts and the audit trail all survived a wipe the user had been told was total. Every store is
+   now listed explicitly, and a wipe that fails halfway says so instead of reporting success.
+
+The second one is worth dwelling on: it had been in the repo since Phase 1, the dialog text was written
+at the same time as the incomplete implementation, and no test caught it because no test asserted that
+the promise and the behaviour matched. The test that now exists asserts the stores are empty afterwards,
+not that the function was called.
+
+### A design problem the compiler could not have found
+
+Phase 12 mapped EventKit's write-only calendar access to `PermissionStatus.limited`, which is truthful —
+AURA really can add an event and really cannot read one. But `.limited.isUsable` is `true`, and tool
+availability was a flat `Set<AuraPermission>`, so `read_calendar` was being *offered* to the model and
+then refused by the gate. EventKit returns an empty array under write-only access, indistinguishable
+from a clear day, so the alternative failure was worse: AURA telling someone their day is free when it
+cannot look.
+
+Fixed with `AssistantTool.requiresFullPermissionAccess` and a `partiallyGrantedPermissions` set on
+`AvailabilityCriteria`. Write-only access now offers the create tool, withholds the read tool, and the
+gate agrees with the offer. Both sides read from one status snapshot so they cannot describe different
+moments.
+
+### What the API-verification passes caught before the compiler did
+
+| Claim checked | What the docs said |
+|---|---|
+| `DynamicGenerationSchema(name:description:anyOf:)` | `anyOf` takes `[DynamicGenerationSchema]`, not `[String]` — the enum case needs `GenerationGuide.anyOf` instead |
+| `Transcript.ToolDefinition(tool:)` | Exists — needed, because instructions ride in the transcript here, so `toolDefinitions: []` would have handed the session tools the model was never told about |
+| `String`/`Int`/`Double`/`Bool`: `Generable` | All four confirmed on the stdlib type pages, not the protocol page |
+| `EKReminder.dueDateComponents` | `DateComponents?`, and `DateComponents.date` is `nil` without a calendar — a dated reminder would have read as undated |
+| EventKit access requests | Documented as completion-handler form; the `async` overloads are compiler-generated, so the documented shape is used |
+
+### What only the compiler could tell us
+
+| Run | Failure |
+|---|---|
+| 32 | `AuraError.toolIterationLimitReached` takes `limit:` — thrown without it, the case name is a function value |
+| 33 | `GenerationSchema.name` is **iOS 27 and beta**, so not on the iOS 26 SDK. The docs page listed the member; the availability annotation was on the member's own page |
+| 35 | Four Swift 6 concurrency errors in the EventKit bridge: a non-`Sendable` `[EKReminder]` crossing a continuation, `EKEventStore` sent out of its own actor, two callbacks missing `@Sendable` |
+
+Run 33's is the instructive one. Verifying that a member exists is not the same as verifying it exists
+*on the SDK being built against*, and the availability annotation lives on the member's page rather than
+the type's. That is now part of the check.
+
+### Still true
+
+Phase 12 is the first phase where the gap between "verified" and "works" is wide. A simulator has no
+calendar data, no address book and grants no real authorization, so CI can prove the tools compile and
+that the policy deciding what the user gets told is correct — and can prove nothing at all about reading
+a real calendar. Add the standing caveat: the on-device model has still never called a tool, the
+microphone has never opened, and nothing has been spoken aloud. **AURA is thoroughly verified and has
+never been used.**
+
+---
+
 ## Phases 5, 6 and 7 — status
 
 **Verified by CI run 24: build clean, whole suite passing.** The first fully green run since Phase 2, and it
