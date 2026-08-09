@@ -36,15 +36,17 @@ struct FoundationModelToolBridgeTests {
         let parameters = ToolParameter.ValueType.allCasesForTesting.map { type in
             ToolParameter(name: "field_\(type.rawValue)", description: "A \(type.rawValue).", type: type)
         }
-        let schema = try FoundationModelToolBridge.schema(for: Self.definition(parameters))
-        #expect(schema.name.isEmpty == false)
+        // The assertion is the `try`: `GenerationSchema(root:dependencies:)` throws on anything it cannot
+        // represent, which is exactly the failure this guards against. Its contents are not inspectable on
+        // the iOS 26 SDK — `GenerationSchema.name` is iOS 27 — so "it built" is the whole available signal.
+        _ = try FoundationModelToolBridge.schema(for: Self.definition(parameters))
     }
 
     @Test("A constrained parameter builds, and constraints win over the declared type")
     func allowedValuesBuild() throws {
         // A set of choices is always strings on the wire. A tool declaring `.integer` with `allowedValues`
         // must not lose the constraint, which is why `leafSchema` checks it first.
-        let schema = try FoundationModelToolBridge.schema(for: Self.definition([
+        _ = try FoundationModelToolBridge.schema(for: Self.definition([
             ToolParameter(
                 name: "category",
                 description: "Which one.",
@@ -53,15 +55,16 @@ struct FoundationModelToolBridgeTests {
                 allowedValues: ["one", "two"]
             )
         ]))
-        #expect(schema.name.isEmpty == false)
+        // That the constraint reached the schema rather than the declared type is checked where it is
+        // decidable: `leafSchema` takes the `allowedValues` branch first, and a schema built from
+        // `Int.self` would reject a `GenerationGuide<String>` at compile time.
     }
 
     @Test("A tool with no parameters still builds a schema")
     func emptySchemaBuilds() throws {
         // The common case for a read-only tool, and the one most likely to be rejected by a schema builder
         // that assumes at least one property.
-        let schema = try FoundationModelToolBridge.schema(for: Self.definition([]))
-        #expect(schema.name.isEmpty == false)
+        _ = try FoundationModelToolBridge.schema(for: Self.definition([]))
     }
 
     @Test("An unbuildable tool is withheld rather than failing the turn")
