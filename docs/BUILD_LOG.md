@@ -145,6 +145,55 @@ Run 33's is the instructive one. Verifying that a member exists is not the same 
 *on the SDK being built against*, and the availability annotation lives on the member's page rather than
 the type's. That is now part of the check.
 
+### The CI investigation, including the wrong turns
+
+Phases 12 and 13 built clean on the first serious attempt and have stayed clean for eight consecutive
+runs. What took a dozen runs was the *test step*, and the record is worth keeping because most of it was
+me being wrong in instructive ways.
+
+**What was actually broken**
+
+| Problem | Status |
+|---|---|
+| A `withCheckedContinuation` in `ToolConfirmationCoordinator` that could never be resumed | Fixed. Real latent deadlock — cancellation and `.timeLimit` both ignore an unresumed continuation |
+| An approval inverted into a refusal by SwiftUI's dismissal binding | Fixed. Found while restructuring the above |
+| `waitForPending` allowing one second for another task to be scheduled | Fixed. Caused all twelve `ToolConfirmation` failures; nothing was wrong with the coordinator |
+| CI deleting 14 of 22 screenshots after a partial capture | Fixed, and now structurally impossible |
+| Four Swift 6 concurrency errors in the EventKit bridge | Fixed |
+| The suite taking >25 minutes | **Unexplained** |
+
+**Two hypotheses I got wrong, and why**
+
+1. *"The app is crashing on launch during screenshots."* It was not. simctl's error — discarded until I
+   stopped discarding it — said `SimError code=405, Unable to lookup in current state: Shutdown`. The
+   simulator itself was gone, because the test step's timeout kill tears it down and the screenshot step
+   shares the same device. A downstream symptom, not a bug.
+
+2. *"A shared `ModelConfiguration` name serialises in-memory stores."* Per-test duration went 10s → 22s
+   when I gave each store a unique name, so I reverted it — and after the revert it was 25s. The
+   comparison I used to justify the revert had attributed a difference to the wrong variable. Both the
+   change and its justification were wrong.
+
+The finding that killed both: `ToolConfirmationTests` creates **no** SwiftData container and still reports
+~21 seconds per test, while the large suites each complete in about thirty seconds. So the fixed per-test
+cost is neither container creation nor a deadlock, and the suites are not individually slow.
+
+**What actually moved this forward**
+
+Instrumentation, every time. A hang is invisible here because `test.sh` sends xcodebuild's output to a
+file and GitHub will not serve a running job's log — so a deadlock and a slow suite look identical until
+the job ends. Three additions changed that: `timeout-minutes` so the job ends while its log is worth
+reading, a report of the tests that *started and never finished*, and a table of the fifteen slowest
+tests on every run. The slowest-test table is what turned "the suite feels slow" into numbers, and the
+numbers are what showed my second hypothesis was wrong.
+
+One self-inflicted lesson: the first version of that diagnostic was missing its `fi`, so the one run that
+would have explained the hang died with a shell syntax error instead. `Scripts/check-workflow.sh` now
+parses every `run:` block with `bash -n`; a block that only runs on failure is invisible until something
+else fails first.
+
+---
+
 ### Still true
 
 Phase 12 is the first phase where the gap between "verified" and "works" is wide. A simulator has no
