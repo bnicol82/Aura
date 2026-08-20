@@ -145,12 +145,18 @@ jobs:
         # of a *running* job — so a deadlock is invisible until an hour has passed, and then looks like a
         # timeout rather than naming itself.
         #
-        # Twelve minutes was the first guess, based on a four-minute suite. It was too tight: phases 10,
-        # 12 and 13 added about sixty tests, many of which stand up their own in-memory SwiftData
-        # container, and two runs were killed while still passing tests rather than while stuck. Raised to
-        # give a complete run room to finish and report a real total — the point of the cap is to bound a
-        # deadlock, not to police how long an honest suite takes.
-        timeout-minutes: 25
+        # Twelve minutes was the first guess, based on a four-minute suite; twenty-five was the second.
+        # Both were too tight, and the cap has now killed four runs *while they were still passing tests*,
+        # which is the one thing it should never do — the point of a cap is to bound a deadlock, not to
+        # police how long an honest suite takes.
+        #
+        # The suite really did get much slower after phases 10, 12 and 13, and the cause is not yet known.
+        # What run 47 established is that it is not what it looked like: the large suites each finish in
+        # about thirty seconds, and `ToolConfirmationTests` — which creates no SwiftData container at all —
+        # still reports about twenty-one seconds per test. So it is neither container creation nor a
+        # deadlock. Forty minutes buys a complete run and a full slowest-test table to reason from, which is
+        # worth more than another guess.
+        timeout-minutes: 40
         run: ./Scripts/test.sh
 
       - name: Report test result
