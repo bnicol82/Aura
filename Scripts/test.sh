@@ -55,15 +55,40 @@ echo
 
 # --- Test -------------------------------------------------------------------------------------
 
+# Split deliberately into build-for-testing and test-without-building.
+#
+# `xcodebuild test` does both in one opaque step, which meant a suite that grew from four minutes to over
+# forty gave no way to tell whether the time was compilation or execution. Four CI runs were spent
+# guessing at that. Two invocations, each timed, answer it in the first line of output — and the split
+# costs nothing, because the work is identical either way.
+COMPILE_START=$(date +%s)
 xcodebuild \
     -project "$PROJECT" \
     -scheme "$SCHEME" \
     -destination "id=$UDID" \
     -configuration Debug \
     CODE_SIGNING_ALLOWED=NO \
-    test \
+    build-for-testing \
     > "$FULL_LOG" 2>&1
-STATUS=$?
+COMPILE_STATUS=$?
+echo "==> Compiling the test bundle took $(( $(date +%s) - COMPILE_START ))s (status $COMPILE_STATUS)"
+
+if [ "$COMPILE_STATUS" -ne 0 ]; then
+    # Nothing ran, so the report below will show compile errors rather than failures.
+    STATUS=$COMPILE_STATUS
+else
+    RUN_START=$(date +%s)
+    xcodebuild \
+        -project "$PROJECT" \
+        -scheme "$SCHEME" \
+        -destination "id=$UDID" \
+        -configuration Debug \
+        CODE_SIGNING_ALLOWED=NO \
+        test-without-building \
+        >> "$FULL_LOG" 2>&1
+    STATUS=$?
+    echo "==> Running the tests took $(( $(date +%s) - RUN_START ))s (status $STATUS)"
+fi
 
 # --- Report -----------------------------------------------------------------------------------
 
