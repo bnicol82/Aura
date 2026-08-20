@@ -157,10 +157,17 @@ struct ToolConfirmationTests {
     /// Polling rather than a fixed sleep: the request runs on another task, and a sleep long enough to be
     /// reliable would make the whole suite slower for no benefit.
     private static func waitForPending(_ coordinator: ToolConfirmationCoordinator) async throws {
-        for _ in 0..<200 {
+        // Fifteen seconds, not one. The original budget was 200 × 5 ms, which is plenty on an idle machine
+        // and nowhere near enough on a loaded CI runner: every test in this suite failed with "the
+        // coordinator never presented a prompt" purely because the requesting task had not been scheduled
+        // within a second. Nothing was wrong with the coordinator.
+        //
+        // A generous budget costs nothing when the wait succeeds — it returns the moment the prompt
+        // appears — and the only thing a tight one buys is flakiness that looks like a product bug.
+        for _ in 0..<300 {
             if coordinator.pending != nil { return }
             await Task.yield()
-            try await Task.sleep(for: .milliseconds(5))
+            try await Task.sleep(for: .milliseconds(50))
         }
         Issue.record("The coordinator never presented a prompt.")
     }

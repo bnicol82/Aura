@@ -33,23 +33,16 @@ struct PersistenceController: Sendable {
         let effectiveSync: SyncConfiguration = storage == .inMemory ? .localOnly : sync
         let schema = AuraSchemaV1.schema
 
-        // Every in-memory store gets its own name; only the on-disk one keeps the stable "AURA".
+        // A note on a change that was tried and reverted, so nobody repeats it.
         //
-        // This is not cosmetic. SwiftData derives a store *identity* from the configuration name even when
-        // `isStoredInMemoryOnly` is set, so a process holding several in-memory containers had them all
-        // contending for one identity — and SwiftData's response is the probe-and-recover path that
-        // `Scripts/test.sh` already documents ("a wall of CoreData: error: lines, then Recovery attempt was
-        // successful"). It cost roughly ten seconds per container.
+        // Every store shares the configuration name "AURA", and a run where each test's in-memory store
+        // got a unique name instead was measured: per-test duration went from about 10.1 seconds to about
+        // 22.3 seconds. Unique names are roughly twice as slow here, presumably because each distinct
+        // identity does its own store setup rather than reusing one. The shared name stays.
         //
-        // That was survivable while few tests built one. Phases 10, 12 and 13 added about forty-five that
-        // do, and the suite went from four minutes to not finishing inside twenty-five — every one of the
-        // tests visible in run 45's log took 10.07 to 10.35 seconds, a fixed cost rather than work, and
-        // every one of them created a container. The on-disk store keeps its name because for the real app
-        // that name *is* the store's identity across launches.
-        let name = storage == .inMemory ? "AURA-ephemeral-\(UUID().uuidString)" : "AURA"
-
+        // The ~10 second per-test cost is real and still unexplained; it is not this.
         let configuration = ModelConfiguration(
-            name,
+            "AURA",
             schema: schema,
             isStoredInMemoryOnly: storage == .inMemory,
             allowsSave: true,
